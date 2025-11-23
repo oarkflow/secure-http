@@ -18,7 +18,8 @@ type UserRequest struct {
 }
 
 type UserResponse struct {
-	Status  string `json:"status"`
+	Status  int    `json:"status"`
+	Success bool   `json:"success"`
 	Message string `json:"message"`
 	Data    any    `json:"data,omitempty"`
 }
@@ -89,7 +90,8 @@ func main() {
 		}
 
 		response := UserResponse{
-			Status:  "success",
+			Status:  200,
+			Success: true,
 			Message: "Echo response",
 			Data: fiber.Map{
 				"received_name":    req.Name,
@@ -113,7 +115,8 @@ func main() {
 		}
 
 		response := UserResponse{
-			Status:  "success",
+			Status:  200,
+			Success: true,
 			Message: "User info retrieved",
 			Data: fiber.Map{
 				"user":     req.Name,
@@ -137,7 +140,8 @@ func main() {
 		}
 
 		response := UserResponse{
-			Status:  "success",
+			Status:  200,
+			Success: true,
 			Message: "Resource created successfully",
 			Data: fiber.Map{
 				"resource_id": "res_123456",

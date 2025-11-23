@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/oarkflow/securehttp/pkg/crypto"
 )
@@ -18,6 +19,31 @@ const (
 	metadataUserPrefix = "user_meta_"
 )
 
+// HeaderNames defines transport headers used for session coordination.
+type HeaderNames struct {
+	SessionID string
+	UserToken string
+}
+
+// WithDefaults ensures no header value is empty.
+func (h HeaderNames) WithDefaults() HeaderNames {
+	if h.SessionID == "" {
+		h.SessionID = "X-Session-ID"
+	}
+	if h.UserToken == "" {
+		h.UserToken = "X-User-Token"
+	}
+	return h
+}
+
+// DefaultHeaderNames returns the standard header layout.
+func DefaultHeaderNames() HeaderNames {
+	return HeaderNames{
+		SessionID: "X-Session-ID",
+		UserToken: "X-User-Token",
+	}
+}
+
 var (
 	ErrUnknownDevice        = errors.New("unknown device")
 	ErrInvalidDeviceSecret  = errors.New("invalid device secret")
@@ -25,6 +51,49 @@ var (
 	ErrInvalidUserToken     = errors.New("invalid user token")
 	ErrMissingUserToken     = errors.New("user token required")
 )
+
+// AuditEventType represents a security lifecycle hook.
+type AuditEventType string
+
+const (
+	AuditEventHandshakeSuccess AuditEventType = "handshake_success"
+	AuditEventHandshakeFailure AuditEventType = "handshake_failure"
+	AuditEventDecryptSuccess   AuditEventType = "decrypt_success"
+	AuditEventDecryptFailure   AuditEventType = "decrypt_failure"
+)
+
+// AuditEvent captures notable security events for logging/metrics.
+type AuditEvent struct {
+	Type      AuditEventType
+	SessionID string
+	DeviceID  string
+	UserID    string
+	Detail    string
+	Err       error
+	Timestamp time.Time
+}
+
+// AuditLogger receives security events.
+type AuditLogger interface {
+	Record(AuditEvent)
+}
+
+// AuditLoggerFunc adapts a function to AuditLogger.
+type AuditLoggerFunc func(AuditEvent)
+
+// Record implements AuditLogger.
+func (f AuditLoggerFunc) Record(evt AuditEvent) {
+	if f == nil {
+		return
+	}
+	f(evt)
+}
+
+// NoopAuditLogger ignores all events.
+type NoopAuditLogger struct{}
+
+// Record implements AuditLogger.
+func (NoopAuditLogger) Record(AuditEvent) {}
 
 // DeviceRegistry validates device signatures during the handshake.
 type DeviceRegistry interface {
@@ -42,11 +111,19 @@ type SecurityPolicy struct {
 	RequireUser       bool
 	DeviceRegistry    DeviceRegistry
 	UserAuthenticator UserAuthenticator
+	MaxClockSkew      time.Duration
+	SessionTTL        time.Duration
+	MessageTTL        time.Duration
+	Logger            AuditLogger
 }
 
 // DefaultSecurityPolicy returns a policy with no device/user requirements.
 func DefaultSecurityPolicy() *SecurityPolicy {
-	return &SecurityPolicy{}
+	return &SecurityPolicy{
+		MaxClockSkew: time.Minute,
+		SessionTTL:   crypto.SessionTimeout,
+		MessageTTL:   crypto.DefaultMessageTTL,
+	}
 }
 
 // ValidateReady ensures mandatory dependencies are set before runtime use.
@@ -59,6 +136,18 @@ func (p *SecurityPolicy) ValidateReady() error {
 	}
 	if p.RequireUser && p.UserAuthenticator == nil {
 		return errors.New("user authenticator required but missing")
+	}
+	if p.MaxClockSkew <= 0 {
+		p.MaxClockSkew = time.Minute
+	}
+	if p.SessionTTL <= 0 {
+		p.SessionTTL = crypto.SessionTimeout
+	}
+	if p.MessageTTL <= 0 {
+		p.MessageTTL = crypto.DefaultMessageTTL
+	}
+	if p.Logger == nil {
+		p.Logger = NoopAuditLogger{}
 	}
 	return nil
 }

@@ -8,16 +8,39 @@ import (
 	"time"
 )
 
+// SessionManagerConfig controls lifecycle behavior.
+type SessionManagerConfig struct {
+	SessionTimeout  time.Duration
+	CleanupInterval time.Duration
+	MessageTTL      time.Duration
+}
+
 // SessionManager manages encryption sessions
 type SessionManager struct {
 	sessions   map[string]*Session
 	privateKey *ecdh.PrivateKey
 	publicKey  *ecdh.PublicKey
+	config     SessionManagerConfig
 	mu         sync.RWMutex
 }
 
 // NewSessionManager creates a new session manager
 func NewSessionManager() (*SessionManager, error) {
+	return NewSessionManagerWithConfig(SessionManagerConfig{})
+}
+
+// NewSessionManagerWithConfig allows customizing lifecycle parameters.
+func NewSessionManagerWithConfig(cfg SessionManagerConfig) (*SessionManager, error) {
+	if cfg.SessionTimeout <= 0 {
+		cfg.SessionTimeout = SessionTimeout
+	}
+	if cfg.CleanupInterval <= 0 {
+		cfg.CleanupInterval = 5 * time.Minute
+	}
+	if cfg.MessageTTL <= 0 {
+		cfg.MessageTTL = DefaultMessageTTL
+	}
+
 	privKey, pubKey, err := GenerateKeyPair()
 	if err != nil {
 		return nil, err
@@ -27,11 +50,10 @@ func NewSessionManager() (*SessionManager, error) {
 		sessions:   make(map[string]*Session),
 		privateKey: privKey,
 		publicKey:  pubKey,
+		config:     cfg,
 	}
 
-	// Start cleanup goroutine
 	go sm.cleanupExpiredSessions()
-
 	return sm, nil
 }
 
@@ -63,6 +85,8 @@ func (sm *SessionManager) CreateSession(clientPublicKey []byte, metadata map[str
 		LastUsed:     time.Now(),
 		Nonce:        0,
 		Metadata:     cloneMetadata(metadata),
+		SessionTTL:   sm.config.SessionTimeout,
+		MessageTTL:   sm.config.MessageTTL,
 	}
 
 	// Generate session ID
@@ -113,7 +137,7 @@ func (sm *SessionManager) DeleteSession(sessionID string) {
 
 // cleanupExpiredSessions periodically removes expired sessions
 func (sm *SessionManager) cleanupExpiredSessions() {
-	ticker := time.NewTicker(5 * time.Minute)
+	ticker := time.NewTicker(sm.config.CleanupInterval)
 	defer ticker.Stop()
 
 	for range ticker.C {

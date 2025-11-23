@@ -3,6 +3,7 @@ package middleware
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
@@ -11,26 +12,49 @@ import (
 )
 
 const (
-	MaxMessageSize  = 10 * 1024 * 1024 // 10MB
-	headerSessionID = "X-Session-ID"
-	headerUserToken = "X-User-Token"
+	MaxMessageSize = 10 * 1024 * 1024 // 10MB
 )
+
+// Config defines how the crypto middleware behaves.
+type Config struct {
+	Policy               *security.SecurityPolicy
+	Headers              security.HeaderNames
+	SessionManagerConfig crypto.SessionManagerConfig
+}
 
 // CryptoMiddleware handles encryption/decryption for Fiber
 type CryptoMiddleware struct {
 	sessionManager *crypto.SessionManager
 	policy         *security.SecurityPolicy
+	headers        security.HeaderNames
 }
 
 // NewCryptoMiddleware creates a new crypto middleware
 func NewCryptoMiddleware(policy *security.SecurityPolicy) (*CryptoMiddleware, error) {
+	return NewCryptoMiddlewareWithConfig(Config{Policy: policy})
+}
+
+// NewCryptoMiddlewareWithConfig builds the middleware with advanced options.
+func NewCryptoMiddlewareWithConfig(cfg Config) (*CryptoMiddleware, error) {
+	policy := cfg.Policy
 	if policy == nil {
 		policy = security.DefaultSecurityPolicy()
 	}
 	if err := policy.ValidateReady(); err != nil {
 		return nil, err
 	}
-	sm, err := crypto.NewSessionManager()
+	headers := cfg.Headers.WithDefaults()
+	sessionCfg := cfg.SessionManagerConfig
+	if sessionCfg.SessionTimeout <= 0 {
+		sessionCfg.SessionTimeout = policy.SessionTTL
+	}
+	if sessionCfg.MessageTTL <= 0 {
+		sessionCfg.MessageTTL = policy.MessageTTL
+	}
+	if sessionCfg.CleanupInterval <= 0 {
+		sessionCfg.CleanupInterval = 5 * time.Minute
+	}
+	sm, err := crypto.NewSessionManagerWithConfig(sessionCfg)
 	if err != nil {
 		return nil, err
 	}
@@ -38,6 +62,7 @@ func NewCryptoMiddleware(policy *security.SecurityPolicy) (*CryptoMiddleware, er
 	return &CryptoMiddleware{
 		sessionManager: sm,
 		policy:         policy,
+		headers:        headers,
 	}, nil
 }
 
@@ -49,17 +74,17 @@ func (cm *CryptoMiddleware) GetSessionManager() *crypto.SessionManager {
 // Decrypt middleware decrypts incoming requests
 func (cm *CryptoMiddleware) Decrypt() fiber.Handler {
 	return func(c *fiber.Ctx) error {
-		// Get session ID from header
-		sessionID := c.Get(headerSessionID)
+		sessionID := c.Get(cm.headers.SessionID)
 		if sessionID == "" {
+			cm.logEvent(security.AuditEventDecryptFailure, "", "", nil, "missing session header", fmt.Errorf("missing session"))
 			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
 				"error": "Missing session ID",
 			})
 		}
 
-		// Get session
 		session, exists := cm.sessionManager.GetSession(sessionID)
 		if !exists {
+			cm.logEvent(security.AuditEventDecryptFailure, sessionID, "", nil, "session not found", fmt.Errorf("session invalid"))
 			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
 				"error": "Invalid or expired session",
 			})
@@ -67,10 +92,11 @@ func (cm *CryptoMiddleware) Decrypt() fiber.Handler {
 
 		var userCtx *security.UserContext
 		if cm.policy != nil && cm.policy.UserAuthenticator != nil {
-			token := c.Get(headerUserToken)
+			token := c.Get(cm.headers.UserToken)
 			if token != "" {
 				ctx, err := cm.policy.UserAuthenticator.Validate(token)
 				if err != nil {
+					cm.logEvent(security.AuditEventDecryptFailure, sessionID, session.Metadata[security.MetadataDeviceID], nil, "user token invalid", err)
 					return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
 						"error": "Invalid user token",
 					})
@@ -79,12 +105,14 @@ func (cm *CryptoMiddleware) Decrypt() fiber.Handler {
 			} else if cm.policy.RequireUser {
 				userCtx = security.ExtractUserContext(session.Metadata)
 				if userCtx == nil {
+					cm.logEvent(security.AuditEventDecryptFailure, sessionID, session.Metadata[security.MetadataDeviceID], nil, "missing user token", fmt.Errorf("user token missing"))
 					return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
 						"error": "Missing user token",
 					})
 				}
 			}
 		} else if cm.policy != nil && cm.policy.RequireUser {
+			cm.logEvent(security.AuditEventDecryptFailure, sessionID, session.Metadata[security.MetadataDeviceID], nil, "user verification disabled", fmt.Errorf("user verification disabled"))
 			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
 				"error": "User verification disabled",
 			})
@@ -92,37 +120,36 @@ func (cm *CryptoMiddleware) Decrypt() fiber.Handler {
 			userCtx = security.ExtractUserContext(session.Metadata)
 		}
 
-		// Read encrypted body
 		body := c.Body()
 		if len(body) == 0 {
+			cm.logEvent(security.AuditEventDecryptFailure, sessionID, session.Metadata[security.MetadataDeviceID], userCtx, "empty body", fmt.Errorf("empty body"))
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 				"error": "Empty request body",
 			})
 		}
-
 		if len(body) > MaxMessageSize {
+			cm.logEvent(security.AuditEventDecryptFailure, sessionID, session.Metadata[security.MetadataDeviceID], userCtx, "payload too large", fmt.Errorf("payload too large"))
 			return c.Status(fiber.StatusRequestEntityTooLarge).JSON(fiber.Map{
 				"error": "Request too large",
 			})
 		}
 
-		// Parse encrypted message
 		var encMsg crypto.EncryptedMessage
 		if err := json.Unmarshal(body, &encMsg); err != nil {
+			cm.logEvent(security.AuditEventDecryptFailure, sessionID, session.Metadata[security.MetadataDeviceID], userCtx, "invalid envelope", err)
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 				"error": "Invalid encrypted message format",
 			})
 		}
 
-		// Decrypt
 		plaintext, err := session.Decrypt(&encMsg)
 		if err != nil {
+			cm.logEvent(security.AuditEventDecryptFailure, sessionID, session.Metadata[security.MetadataDeviceID], userCtx, "decrypt failure", err)
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 				"error": "Decryption failed: " + err.Error(),
 			})
 		}
 
-		// Store decrypted data in context
 		c.Locals("decrypted_body", plaintext)
 		c.Locals("session", session)
 		c.Locals("session_id", sessionID)
@@ -137,6 +164,7 @@ func (cm *CryptoMiddleware) Decrypt() fiber.Handler {
 		if userCtx != nil {
 			c.Locals("user_context", userCtx)
 		}
+		cm.logEvent(security.AuditEventDecryptSuccess, sessionID, session.Metadata[security.MetadataDeviceID], userCtx, "payload decrypted", nil)
 
 		return c.Next()
 	}
@@ -200,31 +228,39 @@ func (cm *CryptoMiddleware) Encrypt() fiber.Handler {
 // Handshake handles the key exchange
 func (cm *CryptoMiddleware) Handshake() fiber.Handler {
 	return func(c *fiber.Ctx) error {
-		// Parse handshake request
 		var req crypto.HandshakeRequest
 		if err := c.BodyParser(&req); err != nil {
+			cm.logEvent(security.AuditEventHandshakeFailure, "", req.DeviceID, nil, "invalid payload", err)
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 				"error": "Invalid request format",
 			})
 		}
 
-		// Verify timestamp (60 second window)
-		now := time.Now().Unix()
-		if abs(now-req.Timestamp) > 60 {
-			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-				"error": "Invalid timestamp",
-			})
+		if cm.policy != nil {
+			skew := cm.policy.MaxClockSkew
+			if skew <= 0 {
+				skew = time.Minute
+			}
+			ts := time.Unix(req.Timestamp, 0)
+			delta := time.Since(ts)
+			if delta > skew || delta < -skew {
+				cm.logEvent(security.AuditEventHandshakeFailure, "", req.DeviceID, nil, "timestamp out of range", fmt.Errorf("timestamp skew"))
+				return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+					"error": "Invalid timestamp",
+				})
+			}
 		}
 
-		// Optional device binding
 		if cm.policy != nil && cm.policy.RequireDevice {
 			if req.DeviceID == "" || len(req.DeviceSignature) == 0 {
+				cm.logEvent(security.AuditEventHandshakeFailure, "", req.DeviceID, nil, "missing device identity", fmt.Errorf("missing device"))
 				return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
 					"error": "Missing device identity",
 				})
 			}
 			payload := security.DeviceAuthenticationPayload(req.ClientPublicKey, req.Timestamp)
 			if err := cm.policy.DeviceRegistry.Validate(req.DeviceID, req.DeviceSignature, payload); err != nil {
+				cm.logEvent(security.AuditEventHandshakeFailure, "", req.DeviceID, nil, "device validation failed", err)
 				return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
 					"error": "Device validation failed",
 				})
@@ -235,6 +271,7 @@ func (cm *CryptoMiddleware) Handshake() fiber.Handler {
 		if cm.policy != nil && cm.policy.UserAuthenticator != nil {
 			if req.UserToken == "" {
 				if cm.policy.RequireUser {
+					cm.logEvent(security.AuditEventHandshakeFailure, "", req.DeviceID, nil, "missing user token", fmt.Errorf("missing user token"))
 					return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
 						"error": "Missing user token",
 					})
@@ -242,6 +279,7 @@ func (cm *CryptoMiddleware) Handshake() fiber.Handler {
 			} else {
 				ctx, err := cm.policy.UserAuthenticator.Validate(req.UserToken)
 				if err != nil {
+					cm.logEvent(security.AuditEventHandshakeFailure, "", req.DeviceID, nil, "user token invalid", err)
 					return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
 						"error": "Invalid user token",
 					})
@@ -249,6 +287,7 @@ func (cm *CryptoMiddleware) Handshake() fiber.Handler {
 				userCtx = ctx
 			}
 		} else if cm.policy != nil && cm.policy.RequireUser {
+			cm.logEvent(security.AuditEventHandshakeFailure, "", req.DeviceID, nil, "user verification disabled", fmt.Errorf("user verification disabled"))
 			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
 				"error": "User verification disabled",
 			})
@@ -265,31 +304,43 @@ func (cm *CryptoMiddleware) Handshake() fiber.Handler {
 			metadata = nil
 		}
 
-		// Create session
 		sessionID, err := cm.sessionManager.CreateSession(req.ClientPublicKey, metadata)
 		if err != nil {
+			cm.logEvent(security.AuditEventHandshakeFailure, "", req.DeviceID, userCtx, "session creation failed", err)
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 				"error": "Failed to create session",
 			})
 		}
 
-		// Prepare response
 		nowTime := time.Now()
 		resp := crypto.HandshakeResponse{
 			ServerPublicKey: cm.sessionManager.GetPublicKey(),
 			SessionID:       []byte(sessionID),
 			DeviceID:        req.DeviceID,
-			ExpiresAt:       nowTime.Add(crypto.SessionTimeout).Unix(),
+			ExpiresAt:       nowTime.Add(cm.policy.SessionTTL).Unix(),
 			Timestamp:       nowTime.Unix(),
 		}
 
+		cm.logEvent(security.AuditEventHandshakeSuccess, sessionID, req.DeviceID, userCtx, "session established", nil)
 		return c.JSON(resp)
 	}
 }
 
-func abs(x int64) int64 {
-	if x < 0 {
-		return -x
+// logEvent forwards structured events to the configured audit logger.
+func (cm *CryptoMiddleware) logEvent(eventType security.AuditEventType, sessionID, deviceID string, userCtx *security.UserContext, detail string, err error) {
+	if cm == nil || cm.policy == nil || cm.policy.Logger == nil {
+		return
 	}
-	return x
+	evt := security.AuditEvent{
+		Type:      eventType,
+		SessionID: sessionID,
+		DeviceID:  deviceID,
+		Detail:    detail,
+		Err:       err,
+		Timestamp: time.Now(),
+	}
+	if userCtx != nil {
+		evt.UserID = userCtx.ID
+	}
+	cm.policy.Logger.Record(evt)
 }

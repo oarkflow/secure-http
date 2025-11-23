@@ -14,7 +14,8 @@ type UserRequest struct {
 }
 
 type UserResponse struct {
-	Status  string                 `json:"status"`
+	Status  int                    `json:"status"`
+	Success bool                   `json:"success"`
 	Message string                 `json:"message"`
 	Data    map[string]interface{} `json:"data,omitempty"`
 }
@@ -100,7 +101,7 @@ func main() {
 		if err := secureClient.PostJSON("/api/echo", req, &resp); err != nil {
 			log.Printf("Request %d failed: %v", i+1, err)
 		} else {
-			log.Printf("✅ Request %d successful: %s", i+1, resp.Status)
+			log.Printf("✅ Request %d successful: %d", i+1, resp.Status)
 		}
 		time.Sleep(200 * time.Millisecond)
 	}

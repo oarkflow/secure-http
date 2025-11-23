@@ -18,10 +18,11 @@ import (
 )
 
 const (
-	NonceSize      = 12
-	KeySize        = 32
-	HMACSize       = 32
-	SessionTimeout = 30 * time.Minute
+	NonceSize         = 12
+	KeySize           = 32
+	HMACSize          = 32
+	SessionTimeout    = 30 * time.Minute
+	DefaultMessageTTL = 5 * time.Minute
 )
 
 // Session stores encryption keys and metadata
@@ -33,6 +34,8 @@ type Session struct {
 	LastUsed     time.Time
 	Nonce        uint64
 	Metadata     map[string]string
+	SessionTTL   time.Duration
+	MessageTTL   time.Duration
 	mu           sync.Mutex
 }
 
@@ -160,9 +163,14 @@ func (s *Session) Decrypt(msg *EncryptedMessage) ([]byte, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Verify timestamp (5 minute window)
-	now := time.Now().Unix()
-	if abs(now-msg.Timestamp) > 300 {
+	// Verify timestamp within allowed window
+	msgWindow := s.MessageTTL
+	if msgWindow <= 0 {
+		msgWindow = DefaultMessageTTL
+	}
+	msgTime := time.Unix(msg.Timestamp, 0)
+	delta := time.Since(msgTime)
+	if delta > msgWindow || delta < -msgWindow {
 		return nil, errors.New("message expired")
 	}
 
@@ -198,12 +206,9 @@ func (s *Session) Decrypt(msg *EncryptedMessage) ([]byte, error) {
 
 // IsExpired checks if session has expired
 func (s *Session) IsExpired() bool {
-	return time.Since(s.LastUsed) > SessionTimeout
-}
-
-func abs(x int64) int64 {
-	if x < 0 {
-		return -x
+	ttl := s.SessionTTL
+	if ttl <= 0 {
+		ttl = SessionTimeout
 	}
-	return x
+	return time.Since(s.LastUsed) > ttl
 }
