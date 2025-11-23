@@ -67,6 +67,20 @@ func (cs *ClientSession) isExpired() bool {
 	return !cs.ExpiresAt.IsZero() && time.Now().After(cs.ExpiresAt)
 }
 
+func (c *SecureClient) needsHandshakeLocked() bool {
+	if c.session == nil {
+		return true
+	}
+	return c.session.isExpired()
+}
+
+// NeedsHandshake reports whether the current session is missing or expired.
+func (c *SecureClient) NeedsHandshake() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.needsHandshakeLocked()
+}
+
 // NewSecureClient creates a new secure client bound to a device/user identity.
 func NewSecureClient(cfg Config) (*SecureClient, error) {
 	if cfg.BaseURL == "" {

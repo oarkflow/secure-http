@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>secureFetch Browser Demo</title>
+    <link rel="stylesheet" href="styles.css" />
+</head>
+
+<body>
+    <main class="container">
+        <h1>secureFetch WebAssembly Demo</h1>
+        <p>
+            This page wires <code>secureFetchInit</code> and <code>secureFetch</code> to a simple
+            UI so you can exercise the encrypted transport directly from the browser.
+            Build <code>securefetch.wasm</code>, copy it next to this file together with
+            Go's <code>wasm_exec.js</code>, then serve the directory with any static server.
+        </p>
+
+        <section>
+            <h2>1. Configure client</h2>
+            <form id="init-form" class="card">
+                <label>
+                    Base URL
+                    <input type="url" name="baseURL" required placeholder="https://localhost:8443" />
+                </label>
+                <label>
+                    Device ID
+                    <input type="text" name="deviceID" required placeholder="device-001" />
+                </label>
+                <label>
+                    Device Secret
+                    <input type="text" name="deviceSecret" required placeholder="base64:ZGV2LXNlY3JldA==" />
+                </label>
+                <label>
+                    Secret Format
+                    <select name="secretFormat">
+                        <option value="text">UTF-8 string</option>
+                        <option value="base64" selected>base64: prefix</option>
+                        <option value="bytes">Uint8Array (comma separated bytes)</option>
+                    </select>
+                </label>
+                <label>
+                    User Token (optional)
+                    <input type="text" name="userToken" placeholder="user-token-123" />
+                </label>
+                <label>
+                    Handshake Path
+                    <input type="text" name="handshakePath" placeholder="/handshake" />
+                </label>
+                <label class="inline">
+                    <input type="checkbox" name="autoHandshake" checked /> Auto-handshake on init
+                </label>
+                <button type="submit">Initialize secure client</button>
+            </form>
+            <div class="actions">
+                <button id="handshake-btn" type="button">Force handshake</button>
+                <button id="reset-btn" type="button">Reset client</button>
+                <span id="status-indicator">Not initialized</span>
+            </div>
+        </section>
+
+        <section>
+            <h2>2. Send secure request</h2>
+            <form id="request-form" class="card">
+                <label>
+                    Endpoint (or absolute URL)
+                    <input type="text" name="endpoint" required placeholder="/api/echo" />
+                </label>
+                <label>
+                    Request Body (JSON)
+                    <textarea name="body" rows="4" placeholder='{"name":"Browser","message":"Hello"}'></textarea>
+                </label>
+                <label>
+                    Response Type
+                    <select name="responseType">
+                        <option value="json" selected>JSON</option>
+                        <option value="text">Text</option>
+                        <option value="bytes">Uint8Array</option>
+                    </select>
+                </label>
+                <label class="inline">
+                    <input type="checkbox" name="forceHandshake" /> Force handshake before request
+                </label>
+                <button type="submit">Call secureFetch</button>
+            </form>
+        </section>
+
+        <section>
+            <h2>Console</h2>
+            <pre id="console"></pre>
+        </section>
+    </main>
+
+    <script src="wasm_exec.js"></script>
+    <script src="app.js" type="module"></script>
+</body>
+
+</html>
