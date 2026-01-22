@@ -39,4 +39,4 @@ wasm:
 # Run the secure HTTP server
 run-server:
 	@echo "Starting secure server on :8443..."
-	go run ./cmd/fullstack  -config config/server.json -web web/demo -static-prefix /lab -addr :8443
+	go run ./cmd/fullstack  -config config/server.json -web ./cmd/fullstack/client -static-prefix /lab -addr :8443

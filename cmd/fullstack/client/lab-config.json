@@ -1,0 +1,14 @@
+{
+    "accounts": [
+        {
+            "id": "owner",
+            "label": "Owner – Admin",
+            "description": "Full access to all protected APIs"
+        },
+        {
+            "id": "operator",
+            "label": "Operator",
+            "description": "Limited to read-only operations"
+        }
+    ]
+}
