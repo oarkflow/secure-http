@@ -42,7 +42,7 @@ type pentestRequest struct {
 func main() {
 	var (
 		configPath   = flag.String("config", defaultConfigPath(), "Path to server configuration JSON")
-		webRoot      = flag.String("web", "web/securefetch-demo", "Static asset directory (includes index.html + securefetch.wasm)")
+		webRoot      = flag.String("web", "web/demo", "Static asset directory (includes index.html + fetch.wasm)")
 		staticPrefix = flag.String("static-prefix", "/demo", "URL prefix that serves the WASM + static bundle")
 		addrOverride = flag.String("addr", "", "Override listen address (defaults to listen_addr in config)")
 	)
@@ -598,7 +598,6 @@ func handleFileUpload(auditLogger security.AuditLogger) fiber.Handler {
 func handleListFiles() fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		uploadsDir := "uploads"
-
 		// Create directory if it doesn't exist
 		if err := os.MkdirAll(uploadsDir, 0755); err != nil {
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to access uploads directory"})
@@ -701,7 +700,7 @@ func ensureStaticBundle(root string) error {
 			return fmt.Errorf("missing %s in %s: %w", file, root, err)
 		}
 	}
-	warnIfMissing(filepath.Join(root, "securefetch.wasm"))
+	warnIfMissing(filepath.Join(root, "fetch.wasm"))
 	warnIfMissing(filepath.Join(root, "wasm_exec.js"))
 	return nil
 }

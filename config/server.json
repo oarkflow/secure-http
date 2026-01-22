@@ -1,72 +1,73 @@
 {
-    "listen_addr": ":8443",
-    "auth": {
-        "require_device": true,
-        "require_user": true,
-        "jwt_signing_key": "your-secure-256-bit-secret-key-minimum-32-chars-for-production"
-    },
-    "gate": {
-        "max_clock_skew": "30s",
-        "nonce_ttl": "2m",
-        "allowed_origins": [
-            "http://localhost:8443",
-            "http://localhost:3010"
-        ],
-        "strict_origin": false,
-        "rate_limit": {
-            "window": "15s",
-            "max_hits": 20
-        },
-        "secrets": [
-            {
-                "id": "2026-Q1",
-                "secret": "base64:Z2F0ZS1zZWNyZXQtMjAyNi1xMQ==",
-                "not_before": "2025-01-01T00:00:00Z",
-                "expires_at": "2026-07-01T00:00:00Z"
-            },
-            {
-                "id": "2026-Q2",
-                "secret": "base64:Z2F0ZS1zZWNyZXQtMjAyNi1xMg==",
-                "not_before": "2026-04-01T00:00:00Z",
-                "expires_at": "2026-12-31T23:59:59Z"
-            }
-        ]
-    },
-    "capabilities": [
-        {
-            "token": "cap-root",
-            "routes": [
-                { "path": "/handshake", "methods": [ "POST" ] },
-                { "path": "/api/*", "methods": [ "POST" ] },
-                { "path": "/health", "methods": [ "GET" ] }
-            ],
-            "metadata": {
-                "tier": "root"
-            }
-        }
-    ],
-    "devices": [
-        { "id": "device-001", "secret": "base64:ZGV2aWNlLTAwMS1zZWNyZXQ=" },
-        { "id": "device-002", "secret": "base64:ZGV2aWNlLTAwMi1zZWNyZXQ=" }
-    ],
-    "users": [
-        {
-            "token": "user-token-123",
-            "id": "user-123",
-            "roles": [ "admin", "device-owner" ],
-            "metadata": { "email": "owner@example.com" }
-        },
-        {
-            "token": "user-token-456",
-            "id": "user-456",
-            "roles": [ "operator" ],
-            "metadata": { "email": "operator@example.com" }
-        }
-    ],
-    "alerts": {
-        "log_file": "logs/audit.log",
-        "webhook_url": "",
-        "min_interval": "5s",
-        "include_events": [ ]
-    }
+	"listen_addr": ":8443",
+	"auth": {
+		"require_device": true,
+		"require_user": true,
+		"jwt_signing_key": "your-secure-256-bit-secret-key-minimum-32-chars-for-production"
+	},
+	"gate": {
+		"max_clock_skew": "30s",
+		"nonce_ttl": "2m",
+		"allowed_origins": [
+			"http://localhost:8443",
+			"http://localhost:3010"
+		],
+		"strict_origin": false,
+		"rate_limit": {
+			"window": "15s",
+			"max_hits": 20
+		},
+		"secrets": [
+			{
+				"id": "2026-Q1",
+				"secret": "base64:Z2F0ZS1zZWNyZXQtMjAyNi1xMQ==",
+				"not_before": "2025-01-01T00:00:00Z",
+				"expires_at": "2026-07-01T00:00:00Z"
+			},
+			{
+				"id": "2026-Q2",
+				"secret": "base64:Z2F0ZS1zZWNyZXQtMjAyNi1xMg==",
+				"not_before": "2026-04-01T00:00:00Z",
+				"expires_at": "2026-12-31T23:59:59Z"
+			}
+		]
+	},
+	"capabilities": [
+		{
+			"token": "cap-root",
+			"routes": [
+				{ "path": "/handshake", "methods": [ "POST" ] },
+				{ "path": "/api/*", "methods": [ "POST" ] },
+				{ "path": "/api/files", "methods": [ "GET" ] },
+				{ "path": "/health", "methods": [ "GET" ] }
+			],
+			"metadata": {
+				"tier": "root"
+			}
+		}
+	],
+	"devices": [
+		{ "id": "device-001", "secret": "base64:ZGV2aWNlLTAwMS1zZWNyZXQ=" },
+		{ "id": "device-002", "secret": "base64:ZGV2aWNlLTAwMi1zZWNyZXQ=" }
+	],
+	"users": [
+		{
+			"token": "user-token-123",
+			"id": "user-123",
+			"roles": [ "admin", "device-owner" ],
+			"metadata": { "email": "owner@example.com" }
+		},
+		{
+			"token": "user-token-456",
+			"id": "user-456",
+			"roles": [ "operator" ],
+			"metadata": { "email": "operator@example.com" }
+		}
+	],
+	"alerts": {
+		"log_file": "logs/audit.log",
+		"webhook_url": "",
+		"min_interval": "5s",
+		"include_events": [ ]
+	}
 }

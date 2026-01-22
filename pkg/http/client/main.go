@@ -309,14 +309,27 @@ func (c *SecureClient) Handshake() error {
 	}
 	defer resp.Body.Close()
 
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read handshake response: %w", err)
+	}
+
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("handshake failed with status %d: %s", resp.StatusCode, string(body))
 	}
 
+	if len(body) == 0 {
+		return fmt.Errorf("handshake failed: server returned empty response")
+	}
+
 	var handshakeResp crypto.HandshakeResponse
-	if err := json.NewDecoder(resp.Body).Decode(&handshakeResp); err != nil {
-		return fmt.Errorf("failed to decode handshake response: %w", err)
+	if err := json.Unmarshal(body, &handshakeResp); err != nil {
+		// Include first few bytes to help debug
+		preview := string(body)
+		if len(preview) > 100 {
+			preview = preview[:100] + "..."
+		}
+		return fmt.Errorf("failed to decode handshake response (body: %q): %w", preview, err)
 	}
 	if handshakeResp.DeviceID != "" && handshakeResp.DeviceID != c.deviceID {
 		return fmt.Errorf("device mismatch: expected %s got %s", c.deviceID, handshakeResp.DeviceID)
@@ -428,29 +441,38 @@ func (c *SecureClient) Do(method, endpoint string, data interface{}, contentType
 		}
 	}
 
-	// Encrypt the data
-	encMsg, err := session.encrypt(plaintext)
-	if err != nil {
-		return nil, fmt.Errorf("encryption failed: %w", err)
-	}
+	// For safe methods (GET, HEAD, OPTIONS, DELETE) with no data, skip body encryption
+	isSafeMethod := method == http.MethodGet || method == http.MethodHead ||
+		method == http.MethodOptions || method == http.MethodDelete
+	hasBody := len(plaintext) > 0
 
-	// Marshal encrypted message
-	encBody, err := json.Marshal(encMsg)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal encrypted message: %w", err)
-	}
+	var req *http.Request
+	if isSafeMethod && !hasBody {
+		// No body for safe methods without data
+		req, err = http.NewRequest(method, c.baseURL+endpoint, nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create request: %w", err)
+		}
+	} else {
+		// Encrypt the data
+		encMsg, err := session.encrypt(plaintext)
+		if err != nil {
+			return nil, fmt.Errorf("encryption failed: %w", err)
+		}
 
-	// Create HTTP request
-	req, err := http.NewRequest(
-		method,
-		c.baseURL+endpoint,
-		bytes.NewReader(encBody),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
-	}
+		// Marshal encrypted message
+		encBody, err := json.Marshal(encMsg)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal encrypted message: %w", err)
+		}
 
-	req.Header.Set("Content-Type", "application/octet-stream")
+		// Create HTTP request with body
+		req, err = http.NewRequest(method, c.baseURL+endpoint, bytes.NewReader(encBody))
+		if err != nil {
+			return nil, fmt.Errorf("failed to create request: %w", err)
+		}
+		req.Header.Set("Content-Type", "application/octet-stream")
+	}
 	req.Header.Set(headerSessionID, session.SessionID)
 	if userToken != "" {
 		req.Header.Set(headerUserToken, userToken)

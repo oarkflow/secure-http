@@ -117,8 +117,30 @@ func (cm *CryptoMiddleware) Decrypt() fiber.Handler {
 			userCtx = security.ExtractUserContext(session.Metadata)
 		}
 
+		attachContext := func(plaintext []byte) {
+			c.Locals("decrypted_body", plaintext)
+			c.Locals("session", session)
+			c.Locals("session_id", sessionID)
+			if session.Metadata != nil {
+				if deviceID := session.Metadata[security.MetadataDeviceID]; deviceID != "" {
+					c.Locals("device_id", deviceID)
+				}
+			}
+			if userCtx == nil {
+				userCtx = security.ExtractUserContext(session.Metadata)
+			}
+			if userCtx != nil {
+				c.Locals("user_context", userCtx)
+			}
+		}
+
 		body := c.Body()
 		if len(body) == 0 {
+			if c.Method() == fiber.MethodGet || c.Method() == fiber.MethodHead {
+				attachContext(nil)
+				cm.logEvent(security.AuditEventDecryptSuccess, sessionID, session.Metadata[security.MetadataDeviceID], userCtx, "empty payload allowed for safe method", nil)
+				return c.Next()
+			}
 			cm.logEvent(security.AuditEventDecryptFailure, sessionID, session.Metadata[security.MetadataDeviceID], userCtx, "empty body", fmt.Errorf("empty body"))
 			return respondNotFound(c)
 		}
@@ -139,20 +161,7 @@ func (cm *CryptoMiddleware) Decrypt() fiber.Handler {
 			return respondNotFound(c)
 		}
 
-		c.Locals("decrypted_body", plaintext)
-		c.Locals("session", session)
-		c.Locals("session_id", sessionID)
-		if session.Metadata != nil {
-			if deviceID := session.Metadata[security.MetadataDeviceID]; deviceID != "" {
-				c.Locals("device_id", deviceID)
-			}
-		}
-		if userCtx == nil {
-			userCtx = security.ExtractUserContext(session.Metadata)
-		}
-		if userCtx != nil {
-			c.Locals("user_context", userCtx)
-		}
+		attachContext(plaintext)
 		cm.logEvent(security.AuditEventDecryptSuccess, sessionID, session.Metadata[security.MetadataDeviceID], userCtx, "payload decrypted", nil)
 
 		return c.Next()
@@ -166,13 +175,11 @@ func (cm *CryptoMiddleware) Encrypt() fiber.Handler {
 
 		// Replace the body writer temporarily
 		c.Context().Response.SetBodyStream(buf, -1)
-
 		// Call next handler
 		err := c.Next()
 		if err != nil {
 			return err
 		}
-
 		// Get session from context
 		session, ok := c.Locals("session").(*crypto.Session)
 		if !ok {
@@ -181,12 +188,10 @@ func (cm *CryptoMiddleware) Encrypt() fiber.Handler {
 
 		// Get the response body that was written
 		responseBody := c.Response().Body()
-
 		// Don't encrypt if response is empty or an error status
 		if len(responseBody) == 0 || c.Response().StatusCode() >= 400 {
 			return nil
 		}
-
 		// Encrypt response
 		encMsg, err := session.Encrypt(responseBody)
 		if err != nil {

@@ -1,4 +1,4 @@
-.PHONY: wasm run-server run-web test clean
+.PHONY: wasm run-server
 
 # Known wasm_exec.js locations (ordered by priority)
 WASM_EXEC_PATHS := \
@@ -11,6 +11,8 @@ WASM_EXEC_PATHS := \
 
 # Find first existing wasm_exec.js
 WASM_EXEC := $(firstword $(wildcard $(WASM_EXEC_PATHS)))
+
+run: wasm run-server
 
 # Build the fetch WASM module and copy runtime shim
 wasm:
@@ -37,24 +39,4 @@ wasm:
 # Run the secure HTTP server
 run-server:
 	@echo "Starting secure server on :8443..."
-	go run ./cmd/server/main.go
-
-# Run the web server to serve the demo UI and WASM
-run-web:
-	@echo "Starting web server on :8082..."
-	go run ./cmd/wasm -addr :8082 -dir web/demo
-
-# Build WASM and run both servers
-test: wasm
-	@echo "Starting servers for testing..."
-	@echo "Secure server: http://localhost:8443"
-	@echo "Web demo: http://localhost:8082"
-	@echo "Press Ctrl+C to stop"
-	@trap 'kill 0' INT; \
-		go run ./cmd/server/main.go & \
-		go run ./cmd/wasm -addr :8082 -dir web/demo & \
-		wait
-
-# Clean built artifacts
-clean:
-	rm -f web/demo/fetch.wasm web/demo/wasm_exec.js
+	go run ./cmd/fullstack  -config config/server.json -web web/demo -static-prefix /lab -addr :8443

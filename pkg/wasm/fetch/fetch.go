@@ -131,7 +131,6 @@ func (s *wasmState) fetch(this js.Value, args []js.Value) any {
 			rejectError(reject, err)
 			return
 		}
-
 		if err := s.ensureSession(req.forceHandshake); err != nil {
 			rejectError(reject, err)
 			return
@@ -182,7 +181,6 @@ func (s *wasmState) fetch(this js.Value, args []js.Value) any {
 				rejectError(reject, fmt.Errorf("unsupported method: %s", req.method))
 				return
 			}
-
 			// Retry with fresh handshake on session error
 			if err != nil && strings.Contains(strings.ToLower(err.Error()), "handshake") {
 				if handshakeErr := s.ensureSession(true); handshakeErr == nil {
@@ -402,7 +400,7 @@ func parseRequest(val js.Value) (wasmRequest, error) {
 
 func buildPayload(body js.Value) ([]byte, error) {
 	if body.IsUndefined() || body.IsNull() {
-		return []byte("null"), nil
+		return nil, nil
 	}
 
 	if body.Type() == js.TypeObject && !uint8ArrayCtor.IsUndefined() && body.InstanceOf(uint8ArrayCtor) {
@@ -557,6 +555,13 @@ func resolveResponse(data []byte, responseType string, resolve js.Value) error {
 		if jsonGlobal.IsUndefined() {
 			return errors.New("JSON global is unavailable")
 		}
+
+		trimmed := strings.TrimSpace(string(data))
+		if trimmed == "" {
+			// Normalize empty responses to null so callers do not get parse errors
+			resolve.Invoke(js.Null())
+			return nil
+		}
 		var (
 			parsed   js.Value
 			parseErr error
@@ -567,7 +572,7 @@ func resolveResponse(data []byte, responseType string, resolve js.Value) error {
 					parseErr = fmt.Errorf("failed to parse json: %v", r)
 				}
 			}()
-			parsed = jsonGlobal.Call("parse", string(data))
+			parsed = jsonGlobal.Call("parse", trimmed)
 		}()
 		if parseErr != nil {
 			return parseErr

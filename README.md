@@ -107,11 +107,7 @@ GOOS=js GOARCH=wasm go build -o web/securefetch-demo/securefetch.wasm ./cmd/secu
 cp "$(go env GOROOT)/misc/wasm/wasm_exec.js" web/securefetch-demo/
 
 # Launch the integrated lab
-go run ./cmd/fullstack \
-    -config config/server.json \
-    -web web/securefetch-demo \
-    -static-prefix /lab \
-    -addr :8443
+go run ./cmd/fullstack  -config config/server.json -web web/demo -static-prefix /lab -addr :8443
 ```
 
 This binary reuses the exact same crypto middleware and gatekeeper configuration, but it also:
