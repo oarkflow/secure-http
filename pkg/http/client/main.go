@@ -464,3 +464,61 @@ func (c *SecureClient) IsConnected() bool {
 	defer c.mu.RUnlock()
 	return c.session != nil
 }
+
+// SessionData represents serializable session information
+type SessionData struct {
+	SessionID string    `json:"session_id"`
+	EncKey    string    `json:"enc_key"`
+	MacKey    string    `json:"mac_key"`
+	ExpiresAt time.Time `json:"expires_at"`
+}
+
+// GetSessionData exports current session data for persistence
+func (c *SecureClient) GetSessionData() *SessionData {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if c.session == nil {
+		return nil
+	}
+
+	return &SessionData{
+		SessionID: c.session.SessionID,
+		EncKey:    base64.StdEncoding.EncodeToString(c.session.EncKey),
+		MacKey:    base64.StdEncoding.EncodeToString(c.session.MacKey),
+		ExpiresAt: c.session.ExpiresAt,
+	}
+}
+
+// RestoreSession restores a previously saved session
+func (c *SecureClient) RestoreSession(data *SessionData) error {
+	if data == nil {
+		return fmt.Errorf("session data is nil")
+	}
+
+	// Check if session is expired
+	if !data.ExpiresAt.IsZero() && time.Now().After(data.ExpiresAt) {
+		return fmt.Errorf("session expired")
+	}
+
+	encKey, err := base64.StdEncoding.DecodeString(data.EncKey)
+	if err != nil {
+		return fmt.Errorf("failed to decode enc key: %w", err)
+	}
+
+	macKey, err := base64.StdEncoding.DecodeString(data.MacKey)
+	if err != nil {
+		return fmt.Errorf("failed to decode mac key: %w", err)
+	}
+
+	c.mu.Lock()
+	c.session = &ClientSession{
+		SessionID: data.SessionID,
+		EncKey:    encKey,
+		MacKey:    macKey,
+		ExpiresAt: data.ExpiresAt,
+	}
+	c.mu.Unlock()
+
+	return nil
+}

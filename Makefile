@@ -1,4 +1,4 @@
-.PHONY: build-wasm run-server run-web test clean
+.PHONY: wasm run-server run-web test clean
 
 # Known wasm_exec.js locations (ordered by priority)
 WASM_EXEC_PATHS := \
@@ -13,7 +13,7 @@ WASM_EXEC_PATHS := \
 WASM_EXEC := $(firstword $(wildcard $(WASM_EXEC_PATHS)))
 
 # Build the secureFetch WASM module and copy runtime shim
-build-wasm:
+wasm:
 	@echo "Building securefetch.wasm..."
 	GOOS=js GOARCH=wasm go build -o web/securefetch-demo/securefetch.wasm ./cmd/securefetchwasm
 
@@ -45,7 +45,7 @@ run-web:
 	go run ./cmd/securefetchweb -addr :8082 -dir web/securefetch-demo
 
 # Build WASM and run both servers
-test: build-wasm
+test: wasm
 	@echo "Starting servers for testing..."
 	@echo "Secure server: http://localhost:8443"
 	@echo "Web demo: http://localhost:8082"

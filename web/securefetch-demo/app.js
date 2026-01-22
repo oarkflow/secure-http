@@ -178,6 +178,7 @@ async function connectSelectedAccount() {
     await secureFetchInit(cfg);
     clientReady = true;
     loggedIn = false;
+    saveLoginState();
     updateControls();
     setStatus(`Handshake pinned to ${currentAccount.label}. Login required.`, "idle");
     const redacted = {
@@ -196,6 +197,7 @@ function disconnectClient(message = "Client reset") {
     }
     clientReady = false;
     loggedIn = false;
+    clearLoginState();
     updateControls();
     setStatus("Not connected");
     log(message);
@@ -204,6 +206,75 @@ function disconnectClient(message = "Client reset") {
 function randomNonce() {
     const bytes = crypto.getRandomValues(new Uint8Array(12));
     return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+function saveLoginState() {
+    if (!currentAccount) {
+        return;
+    }
+    const state = {
+        accountId: currentAccount.id,
+        loggedIn: loggedIn,
+        clientReady: clientReady,
+        timestamp: Date.now(),
+    };
+    try {
+        localStorage.setItem("securefetch_login_state", JSON.stringify(state));
+    } catch (err) {
+        console.warn("Failed to save login state:", err);
+    }
+}
+
+function clearLoginState() {
+    try {
+        localStorage.removeItem("securefetch_login_state");
+    } catch (err) {
+        console.warn("Failed to clear login state:", err);
+    }
+}
+
+function restoreLoginState(config) {
+    try {
+        const stateJSON = localStorage.getItem("securefetch_login_state");
+        if (!stateJSON) {
+            return null;
+        }
+        const state = JSON.parse(stateJSON);
+
+        // Check if state is stale (older than 24 hours)
+        const maxAge = 24 * 60 * 60 * 1000;
+        if (Date.now() - state.timestamp > maxAge) {
+            clearLoginState();
+            return null;
+        }
+
+        // Find matching account
+        const account = config.accounts?.find((acc) => acc.id === state.accountId);
+        if (!account) {
+            clearLoginState();
+            return null;
+        }
+
+        currentAccount = account;
+        loggedIn = state.loggedIn || false;
+        clientReady = state.clientReady || false;
+
+        if (accountSelect) {
+            accountSelect.value = account.id;
+        }
+        renderAccountDetails(account);
+        updateControls();
+
+        return {
+            account,
+            loggedIn: state.loggedIn || false,
+            clientReady: state.clientReady || false,
+        };
+    } catch (err) {
+        console.warn("Failed to restore login state:", err);
+        clearLoginState();
+        return null;
+    }
 }
 
 async function callSecureEndpoint(endpoint, body, description, allowAutoInit = false) {
@@ -234,6 +305,7 @@ async function handleLogin() {
     };
     await callSecureEndpoint("/api/login", payload, "Login", true);
     loggedIn = true;
+    saveLoginState();
     updateControls();
     setStatus(`Logged in as ${currentAccount.label}`, "ok");
 }
@@ -342,12 +414,59 @@ document.addEventListener("DOMContentLoaded", () => {
 
     (async () => {
         try {
+            await wasmReady;
             const lab = await labConfigPromise;
             renderAccounts(lab);
+
+            // Try to restore previous session
+            const restoredState = restoreLoginState(lab);
+            if (restoredState && restoredState.clientReady) {
+                // Reinitialize the client with restored account
+                try {
+                    const cfg = {
+                        baseURL: lab.baseURL,
+                        deviceID: restoredState.account.deviceID,
+                        deviceSecret: restoredState.account.deviceSecret,
+                        userToken: restoredState.account.userToken,
+                        handshakePath: lab.handshakePath,
+                        capabilityToken: lab.capabilityToken,
+                        gateSecrets: lab.gateSecrets,
+                        autoHandshake: false, // Don't auto handshake, try to restore first
+                    };
+                    await secureFetchInit(cfg);
+
+                    // Verify the restored session works by checking session state
+                    if (restoredState.loggedIn) {
+                        try {
+                            await secureFetch({
+                                endpoint: "/api/session/state",
+                                body: {},
+                                responseType: "json",
+                            });
+                            setStatus(`Session restored - ${restoredState.account.label}`, "ok");
+                            log("Session successfully restored and verified", {
+                                account: restoredState.account.id,
+                                loggedIn: true,
+                            });
+                        } catch (err) {
+                            log(`Session verification failed: ${err.message}`);
+                            disconnectClient("Stored session expired");
+                        }
+                    } else {
+                        setStatus(`Handshake restored - ${restoredState.account.label}`, "idle");
+                        log("Handshake restored, login required");
+                    }
+                } catch (err) {
+                    log(`Session restore failed: ${err.message}`);
+                    disconnectClient("Failed to restore session");
+                }
+            }
+
             log("Lab config ready", {
                 accounts: lab.accounts?.length || 0,
                 baseURL: lab.baseURL,
                 gateSecretIDs: lab.gateSecrets?.map((s) => s.id) || [],
+                sessionRestored: restoredState?.clientReady || false,
             });
         } catch (err) {
             log(`Bootstrap error: ${err.message}`);

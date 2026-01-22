@@ -17,7 +17,7 @@ import (
 )
 
 type wasmState struct {
-	mu               sync.Mutex
+	mu               sync.RWMutex
 	client           *clientpkg.SecureClient
 	handshakeRunning bool
 	waiters          []chan error
@@ -94,6 +94,12 @@ func (s *wasmState) init(this js.Value, args []js.Value) any {
 		s.waiters = nil
 		s.handshakeRunning = false
 		s.mu.Unlock()
+
+		// Try to restore session from localStorage
+		if restored := s.tryRestoreSession(); restored {
+			resolve.Invoke(js.Undefined())
+			return
+		}
 
 		if cfg.autoHandshake {
 			if err := s.ensureSession(false); err != nil {
@@ -178,6 +184,9 @@ func (s *wasmState) reset(this js.Value, args []js.Value) any {
 		ch <- errors.New("secureFetch reset")
 		close(ch)
 	}
+
+	// Clear localStorage
+	s.clearStoredSession()
 
 	return js.Undefined()
 }
@@ -513,6 +522,11 @@ func (s *wasmState) ensureSession(force bool) error {
 		close(ch)
 	}
 
+	// Save session to localStorage on success
+	if err == nil {
+		s.saveSession()
+	}
+
 	return err
 }
 
@@ -538,4 +552,71 @@ func rejectError(reject js.Value, err error) {
 		return
 	}
 	reject.Invoke(err.Error())
+}
+
+func (s *wasmState) saveSession() {
+	s.mu.RLock()
+	client := s.client
+	s.mu.RUnlock()
+
+	if client == nil {
+		return
+	}
+
+	sessionData := client.GetSessionData()
+	if sessionData == nil {
+		return
+	}
+
+	jsonData, err := json.Marshal(sessionData)
+	if err != nil {
+		return
+	}
+
+	localStorage := js.Global().Get("localStorage")
+	if !localStorage.Truthy() {
+		return
+	}
+
+	localStorage.Call("setItem", "securefetch_session", string(jsonData))
+}
+
+func (s *wasmState) tryRestoreSession() bool {
+	localStorage := js.Global().Get("localStorage")
+	if !localStorage.Truthy() {
+		return false
+	}
+
+	sessionJSON := localStorage.Call("getItem", "securefetch_session")
+	if !sessionJSON.Truthy() || sessionJSON.Type() != js.TypeString {
+		return false
+	}
+
+	s.mu.RLock()
+	client := s.client
+	s.mu.RUnlock()
+
+	if client == nil {
+		return false
+	}
+
+	var sessionData clientpkg.SessionData
+	if err := json.Unmarshal([]byte(sessionJSON.String()), &sessionData); err != nil {
+		return false
+	}
+
+	if err := client.RestoreSession(&sessionData); err != nil {
+		s.clearStoredSession()
+		return false
+	}
+
+	return true
+}
+
+func (s *wasmState) clearStoredSession() {
+	localStorage := js.Global().Get("localStorage")
+	if !localStorage.Truthy() {
+		return
+	}
+	localStorage.Call("removeItem", "securefetch_session")
 }
