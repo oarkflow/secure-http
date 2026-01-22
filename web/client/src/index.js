@@ -103,14 +103,111 @@ export class SecureClient {
      * @param {string} endpoint
      * @param {object} body
      * @param {string} [responseType="json"]
+     * @param {string} [method="POST"]
      * @returns {Promise<any>}
      */
-    async fetch(endpoint, body, responseType = "json") {
+    async fetch(endpoint, body, responseType = "json", method = "POST") {
         await this.init();
         return window.secureFetch({
             endpoint,
             body,
-            responseType
+            responseType,
+            method
+        });
+    }
+
+    /**
+     * GET request
+     * @param {string} endpoint
+     * @param {string} [responseType="json"]
+     * @returns {Promise<any>}
+     */
+    async get(endpoint, responseType = "json") {
+        return this.fetch(endpoint, null, responseType, "GET");
+    }
+
+    /**
+     * POST request
+     * @param {string} endpoint
+     * @param {object} body
+     * @param {string} [responseType="json"]
+     * @returns {Promise<any>}
+     */
+    async post(endpoint, body, responseType = "json") {
+        return this.fetch(endpoint, body, responseType, "POST");
+    }
+
+    /**
+     * PUT request
+     * @param {string} endpoint
+     * @param {object} body
+     * @param {string} [responseType="json"]
+     * @returns {Promise<any>}
+     */
+    async put(endpoint, body, responseType = "json") {
+        return this.fetch(endpoint, body, responseType, "PUT");
+    }
+
+    /**
+     * DELETE request
+     * @param {string} endpoint
+     * @param {string} [responseType="json"]
+     * @returns {Promise<any>}
+     */
+    async delete(endpoint, responseType = "json") {
+        return this.fetch(endpoint, null, responseType, "DELETE");
+    }
+
+    /**
+     * PATCH request
+     * @param {string} endpoint
+     * @param {object} body
+     * @param {string} [responseType="json"]
+     * @returns {Promise<any>}
+     */
+    async patch(endpoint, body, responseType = "json") {
+        return this.fetch(endpoint, body, responseType, "PATCH");
+    }
+
+    /**
+     * Upload a file with encryption
+     * @param {string} endpoint
+     * @param {File|Blob|Uint8Array} file - File to upload
+     * @param {string} [filename] - Optional filename override
+     * @param {string} [fieldName="file"] - Form field name
+     * @param {object} [formData={}] - Additional form fields
+     * @param {string} [responseType="json"]
+     * @returns {Promise<any>}
+     */
+    async uploadFile(endpoint, file, filename, fieldName = "file", formData = {}, responseType = "json") {
+        await this.init();
+
+        let fileData;
+        let finalFilename = filename;
+
+        if (file instanceof File) {
+            finalFilename = finalFilename || file.name;
+            const arrayBuffer = await file.arrayBuffer();
+            fileData = new Uint8Array(arrayBuffer);
+        } else if (file instanceof Blob) {
+            finalFilename = finalFilename || "blob";
+            const arrayBuffer = await file.arrayBuffer();
+            fileData = new Uint8Array(arrayBuffer);
+        } else if (file instanceof Uint8Array) {
+            fileData = file;
+            finalFilename = finalFilename || "file";
+        } else {
+            throw new Error("File must be File, Blob, or Uint8Array");
+        }
+
+        return window.secureFetch({
+            endpoint,
+            file: fileData,
+            filename: finalFilename,
+            fieldName,
+            formData,
+            responseType,
+            method: "POST"
         });
     }
 

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -375,6 +376,31 @@ func (cs *ClientSession) decrypt(msg *crypto.EncryptedMessage) ([]byte, error) {
 
 // Post sends an encrypted POST request
 func (c *SecureClient) Post(endpoint string, data interface{}) ([]byte, error) {
+	return c.Do(http.MethodPost, endpoint, data, "application/json")
+}
+
+// Get sends an encrypted GET request
+func (c *SecureClient) Get(endpoint string) ([]byte, error) {
+	return c.Do(http.MethodGet, endpoint, nil, "")
+}
+
+// Put sends an encrypted PUT request
+func (c *SecureClient) Put(endpoint string, data interface{}) ([]byte, error) {
+	return c.Do(http.MethodPut, endpoint, data, "application/json")
+}
+
+// Delete sends an encrypted DELETE request
+func (c *SecureClient) Delete(endpoint string) ([]byte, error) {
+	return c.Do(http.MethodDelete, endpoint, nil, "")
+}
+
+// Patch sends an encrypted PATCH request
+func (c *SecureClient) Patch(endpoint string, data interface{}) ([]byte, error) {
+	return c.Do(http.MethodPatch, endpoint, data, "application/json")
+}
+
+// Do sends an encrypted HTTP request with any method
+func (c *SecureClient) Do(method, endpoint string, data interface{}, contentType string) ([]byte, error) {
 	c.mu.RLock()
 	session := c.session
 	userToken := c.userToken
@@ -383,14 +409,152 @@ func (c *SecureClient) Post(endpoint string, data interface{}) ([]byte, error) {
 		return nil, fmt.Errorf("session expired or missing, call Handshake")
 	}
 
-	// Marshal data to JSON
-	jsonData, err := json.Marshal(data)
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal data: %w", err)
+	var plaintext []byte
+	var err error
+
+	// Handle different data types
+	if data != nil {
+		switch v := data.(type) {
+		case []byte:
+			plaintext = v
+		case string:
+			plaintext = []byte(v)
+		default:
+			// Marshal to JSON for objects
+			plaintext, err = json.Marshal(data)
+			if err != nil {
+				return nil, fmt.Errorf("failed to marshal data: %w", err)
+			}
+		}
 	}
 
 	// Encrypt the data
-	encMsg, err := session.encrypt(jsonData)
+	encMsg, err := session.encrypt(plaintext)
+	if err != nil {
+		return nil, fmt.Errorf("encryption failed: %w", err)
+	}
+
+	// Marshal encrypted message
+	encBody, err := json.Marshal(encMsg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal encrypted message: %w", err)
+	}
+
+	// Create HTTP request
+	req, err := http.NewRequest(
+		method,
+		c.baseURL+endpoint,
+		bytes.NewReader(encBody),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/octet-stream")
+	req.Header.Set(headerSessionID, session.SessionID)
+	if userToken != "" {
+		req.Header.Set(headerUserToken, userToken)
+	}
+
+	// Add JWT Bearer token if available
+	c.mu.RLock()
+	accessToken := c.accessToken
+	c.mu.RUnlock()
+	if accessToken != "" {
+		req.Header.Set("Authorization", "Bearer "+accessToken)
+	}
+
+	if err := c.applyGateHeaders(req, method, endpoint); err != nil {
+		return nil, err
+	}
+
+	// Send request
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("request failed with status %d: %s", resp.StatusCode, string(body))
+	}
+
+	// Read encrypted response
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read response: %w", err)
+	}
+
+	// Decrypt response
+	var encResp crypto.EncryptedMessage
+	if err = json.Unmarshal(respBody, &encResp); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal encrypted response: %w", err)
+	}
+
+	decryptedResp, err := session.decrypt(&encResp)
+	if err != nil {
+		return nil, fmt.Errorf("decryption failed: %w", err)
+	}
+
+	return decryptedResp, nil
+}
+
+// PostJSON sends encrypted request and decodes JSON response
+func (c *SecureClient) PostJSON(endpoint string, request interface{}, response interface{}) error {
+	respData, err := c.Post(endpoint, request)
+	if err != nil {
+		return err
+	}
+
+	if err := json.Unmarshal(respData, response); err != nil {
+		return fmt.Errorf("failed to unmarshal response: %w", err)
+	}
+
+	return nil
+}
+
+// UploadFile uploads a file with encryption
+func (c *SecureClient) UploadFile(endpoint string, fileData []byte, filename, fieldName string, formData map[string]string) ([]byte, error) {
+	c.mu.RLock()
+	session := c.session
+	userToken := c.userToken
+	c.mu.RUnlock()
+	if session == nil || session.isExpired() {
+		return nil, fmt.Errorf("session expired or missing, call Handshake")
+	}
+
+	// Build multipart form payload
+	var buf bytes.Buffer
+	writer := multipart.NewWriter(&buf)
+
+	// Add form fields
+	for key, val := range formData {
+		if err := writer.WriteField(key, val); err != nil {
+			return nil, fmt.Errorf("failed to write form field: %w", err)
+		}
+	}
+
+	// Add file
+	if fieldName == "" {
+		fieldName = "file"
+	}
+	part, err := writer.CreateFormFile(fieldName, filename)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create form file: %w", err)
+	}
+
+	if _, err := part.Write(fileData); err != nil {
+		return nil, fmt.Errorf("failed to write file data: %w", err)
+	}
+
+	contentType := writer.FormDataContentType()
+	if err := writer.Close(); err != nil {
+		return nil, fmt.Errorf("failed to close writer: %w", err)
+	}
+
+	// Encrypt the multipart payload
+	encMsg, err := session.encrypt(buf.Bytes())
 	if err != nil {
 		return nil, fmt.Errorf("encryption failed: %w", err)
 	}
@@ -411,8 +575,11 @@ func (c *SecureClient) Post(endpoint string, data interface{}) ([]byte, error) {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
+	// Set headers - encrypted content is always octet-stream
+	// Original content type is preserved in encrypted payload
 	req.Header.Set("Content-Type", "application/octet-stream")
 	req.Header.Set(headerSessionID, session.SessionID)
+	req.Header.Set("X-Original-Content-Type", contentType) // Store original type
 	if userToken != "" {
 		req.Header.Set(headerUserToken, userToken)
 	}
@@ -449,7 +616,7 @@ func (c *SecureClient) Post(endpoint string, data interface{}) ([]byte, error) {
 
 	// Decrypt response
 	var encResp crypto.EncryptedMessage
-	if err := json.Unmarshal(respBody, &encResp); err != nil {
+	if err = json.Unmarshal(respBody, &encResp); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal encrypted response: %w", err)
 	}
 
@@ -459,20 +626,6 @@ func (c *SecureClient) Post(endpoint string, data interface{}) ([]byte, error) {
 	}
 
 	return plaintext, nil
-}
-
-// PostJSON sends encrypted request and decodes JSON response
-func (c *SecureClient) PostJSON(endpoint string, request interface{}, response interface{}) error {
-	respData, err := c.Post(endpoint, request)
-	if err != nil {
-		return err
-	}
-
-	if err := json.Unmarshal(respData, response); err != nil {
-		return fmt.Errorf("failed to unmarshal response: %w", err)
-	}
-
-	return nil
 }
 
 // IsConnected checks if client has an active session

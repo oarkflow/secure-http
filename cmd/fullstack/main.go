@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
@@ -8,7 +9,9 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log"
+	"mime/multipart"
 	"os"
 	"path/filepath"
 	"strings"
@@ -200,13 +203,23 @@ func main() {
 }
 
 func registerSecureRoutes(api fiber.Router, auditLogger security.AuditLogger, sessionManager *crypto.SessionManager) {
+	// Support all HTTP methods
+	api.Get("/echo", handleEcho())
 	api.Post("/echo", handleEcho())
+	api.Put("/echo", handleEcho())
+	api.Delete("/echo", handleEcho())
+	api.Patch("/echo", handleEcho())
+
 	api.Post("/user/info", handleUserInfo())
 	api.Post("/resource/create", handleResourceCreate())
 	api.Post("/login", handleSecureLogin(auditLogger))
 	api.Post("/session/state", handleSessionState())
 	api.Post("/pentest/probe", handlePentestProbe(auditLogger))
 	api.Post("/logout", handleLogout(sessionManager, auditLogger))
+	api.Post("/upload", handleFileUpload(auditLogger))
+	api.Get("/files", handleListFiles())
+	api.Get("/files/:filename", handleDownloadFile())
+
 }
 
 func handleEcho() fiber.Handler {
@@ -216,13 +229,21 @@ func handleEcho() fiber.Handler {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 		}
 		var req map[string]interface{}
-		if err := json.Unmarshal(body, &req); err != nil {
-			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid JSON in decrypted body"})
+		if len(body) > 0 {
+			if err := json.Unmarshal(body, &req); err != nil {
+				// Not JSON, treat as raw data
+				req = map[string]interface{}{
+					"raw_data": string(body),
+				}
+			}
+		} else {
+			req = map[string]interface{}{}
 		}
 		return c.JSON(fiber.Map{
 			"status":  200,
 			"success": true,
 			"message": "Echo response",
+			"method":  c.Method(),
 			"data": fiber.Map{
 				"received":     req,
 				"processed_at": time.Now(),
@@ -471,6 +492,199 @@ func requireSession(c *fiber.Ctx) (*crypto.Session, error) {
 		return nil, errors.New("session not found")
 	}
 	return session, nil
+}
+
+func handleFileUpload(auditLogger security.AuditLogger) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		// Get decrypted multipart body
+		body, err := decryptedBody(c)
+		if err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
+		}
+
+		// Get original content type from header
+		originalContentType := c.Get("X-Original-Content-Type", "")
+		if originalContentType == "" {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Missing original content type"})
+		}
+
+		// Parse multipart form from decrypted body
+		boundary := ""
+		if parts := strings.Split(originalContentType, "boundary="); len(parts) == 2 {
+			boundary = strings.Trim(parts[1], `"`)
+		}
+		if boundary == "" {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid multipart boundary"})
+		}
+
+		reader := multipart.NewReader(bytes.NewReader(body), boundary)
+		form, err := reader.ReadForm(32 << 20) // 32 MB max
+		if err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": fmt.Sprintf("Failed to parse form: %v", err)})
+		}
+		defer form.RemoveAll()
+
+		// Create uploads directory if it doesn't exist
+		uploadsDir := "uploads"
+		if err := os.MkdirAll(uploadsDir, 0755); err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to create uploads directory"})
+		}
+
+		// Extract file info and save files
+		var fileInfo []fiber.Map
+		for fieldName, files := range form.File {
+			for _, fileHeader := range files {
+				file, err := fileHeader.Open()
+				if err != nil {
+					continue
+				}
+				data, _ := io.ReadAll(file)
+				file.Close()
+
+				// Generate unique filename with timestamp
+				timestamp := time.Now().Format("20060102-150405")
+				ext := filepath.Ext(fileHeader.Filename)
+				baseName := strings.TrimSuffix(fileHeader.Filename, ext)
+				uniqueFilename := fmt.Sprintf("%s-%s%s", baseName, timestamp, ext)
+				filePath := filepath.Join(uploadsDir, uniqueFilename)
+
+				// Save file to disk
+				if err := os.WriteFile(filePath, data, 0644); err != nil {
+					log.Printf("Failed to save file %s: %v", uniqueFilename, err)
+					continue
+				}
+
+				fileInfo = append(fileInfo, fiber.Map{
+					"field":         fieldName,
+					"filename":      fileHeader.Filename,
+					"saved_as":      uniqueFilename,
+					"path":          filePath,
+					"size":          len(data),
+					"type":          fileHeader.Header.Get("Content-Type"),
+					"uploaded_at":   time.Now().Format(time.RFC3339),
+				})
+
+				// Log file upload
+				if auditLogger != nil {
+					auditLogger.Record(security.AuditEvent{
+						Type:      security.AuditEventPentestProbe,
+						Timestamp: time.Now(),
+						Detail:    fmt.Sprintf("File uploaded: %s -> %s (%d bytes)", fileHeader.Filename, uniqueFilename, len(data)),
+					})
+				}
+			}
+		}
+
+		// Extract form values
+		formValues := make(map[string][]string)
+		for key, values := range form.Value {
+			formValues[key] = values
+		}
+
+		return c.JSON(fiber.Map{
+			"status":  200,
+			"success": true,
+			"message": "File upload successful",
+			"data": fiber.Map{
+				"files":        fileInfo,
+				"form_values":  formValues,
+				"processed_at": time.Now(),
+				"security":     securityEnvelope(c),
+			},
+		})
+	}
+}
+
+func handleListFiles() fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		uploadsDir := "uploads"
+
+		// Create directory if it doesn't exist
+		if err := os.MkdirAll(uploadsDir, 0755); err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to access uploads directory"})
+		}
+
+		// Read directory contents
+		entries, err := os.ReadDir(uploadsDir)
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to read uploads directory"})
+		}
+
+		var files []fiber.Map
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+
+			info, err := entry.Info()
+			if err != nil {
+				continue
+			}
+
+			files = append(files, fiber.Map{
+				"filename":    entry.Name(),
+				"size":        info.Size(),
+				"modified_at": info.ModTime().Format(time.RFC3339),
+				"download_url": fmt.Sprintf("/api/files/%s", entry.Name()),
+			})
+		}
+
+		return c.JSON(fiber.Map{
+			"status":  200,
+			"success": true,
+			"message": "Files retrieved successfully",
+			"data": fiber.Map{
+				"files":        files,
+				"total":        len(files),
+				"directory":    uploadsDir,
+			},
+		})
+	}
+}
+
+func handleDownloadFile() fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		filename := c.Params("filename")
+		if filename == "" {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Filename required"})
+		}
+
+		// Sanitize filename to prevent directory traversal
+		filename = filepath.Base(filename)
+		filePath := filepath.Join("uploads", filename)
+
+		// Check if file exists
+		info, err := os.Stat(filePath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "File not found"})
+			}
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to access file"})
+		}
+
+		if info.IsDir() {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid file"})
+		}
+
+		// Read file
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to read file"})
+		}
+
+		// Return file info and content (encrypted in response)
+		return c.JSON(fiber.Map{
+			"status":  200,
+			"success": true,
+			"message": "File retrieved successfully",
+			"data": fiber.Map{
+				"filename":    filename,
+				"size":        len(data),
+				"content":     base64.StdEncoding.EncodeToString(data),
+				"modified_at": info.ModTime().Format(time.RFC3339),
+			},
+		})
+	}
 }
 
 func ensureStaticBundle(root string) error {

@@ -12,10 +12,10 @@ WASM_EXEC_PATHS := \
 # Find first existing wasm_exec.js
 WASM_EXEC := $(firstword $(wildcard $(WASM_EXEC_PATHS)))
 
-# Build the secureFetch WASM module and copy runtime shim
+# Build the fetch WASM module and copy runtime shim
 wasm:
-	@echo "Building securefetch.wasm..."
-	GOOS=js GOARCH=wasm go build -o web/securefetch-demo/securefetch.wasm ./cmd/securefetchwasm
+	@echo "Building fetch.wasm..."
+	GOOS=js GOARCH=wasm go build -o web/demo/fetch.wasm ./cmd/wasm
 
 	@echo "Searching for wasm_exec.js..."
 	@if [ -z "$(WASM_EXEC)" ]; then \
@@ -25,14 +25,14 @@ wasm:
 		echo ""; \
 		echo "Fix:"; \
 		echo "  • Ensure Go is properly installed"; \
-		echo "  • Or manually copy wasm_exec.js into web/securefetch-demo/"; \
+		echo "  • Or manually copy wasm_exec.js into web/demo/"; \
 		exit 1; \
 	fi
 
 	@echo "Found wasm_exec.js at: $(WASM_EXEC)"
-	cp "$(WASM_EXEC)" web/securefetch-demo/
+	cp "$(WASM_EXEC)" web/demo/
 
-	@echo "WASM build complete. Files in web/securefetch-demo/"
+	@echo "WASM build complete. Files in web/demo/"
 
 # Run the secure HTTP server
 run-server:
@@ -42,7 +42,7 @@ run-server:
 # Run the web server to serve the demo UI and WASM
 run-web:
 	@echo "Starting web server on :8082..."
-	go run ./cmd/securefetchweb -addr :8082 -dir web/securefetch-demo
+	go run ./cmd/wasm -addr :8082 -dir web/demo
 
 # Build WASM and run both servers
 test: wasm
@@ -52,9 +52,9 @@ test: wasm
 	@echo "Press Ctrl+C to stop"
 	@trap 'kill 0' INT; \
 		go run ./cmd/server/main.go & \
-		go run ./cmd/securefetchweb -addr :8082 -dir web/securefetch-demo & \
+		go run ./cmd/wasm -addr :8082 -dir web/demo & \
 		wait
 
 # Clean built artifacts
 clean:
-	rm -f web/securefetch-demo/securefetch.wasm web/securefetch-demo/wasm_exec.js
+	rm -f web/demo/fetch.wasm web/demo/wasm_exec.js
