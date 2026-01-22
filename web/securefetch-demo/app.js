@@ -3,18 +3,18 @@ import { SecureClient } from "../client/src/index.js";
 
 let consoleEl;
 let statusEl;
-let accountSelect;
-let accountDetailsEl;
-let resetBtn;
+let loginForm;
+let userIdInput;
+let userTokenInput;
 let loginBtn;
+let resetBtn;
 let sessionBtn;
 let echoBtn;
 let pentestBtn;
 let logoutBtn;
 
 let loggedIn = false;
-let currentAccount = null;
-const labConfigPromise = loadLabConfig();
+let currentUserID = null;
 const protectedButtons = [];
 
 // Initialize SecureClient
@@ -49,137 +49,127 @@ function setStatus(text, variant = "idle") {
     statusEl.dataset.variant = variant;
 }
 
-async function loadLabConfig() {
-    const resp = await fetch("lab-config.json", { cache: "no-cache" });
-    if (!resp.ok) {
-        throw new Error(`Unable to load lab-config.json (${resp.status})`);
-    }
-    const cfg = await resp.json();
-    cfg.baseURL = cfg.baseURL?.trim() || window.location.origin;
-    return cfg;
-}
-
-function renderAccounts(config) {
-    if (!accountSelect) {
-        return;
-    }
-    accountSelect.innerHTML = "";
-    if (!config.accounts?.length) {
-        const option = document.createElement("option");
-        option.value = "";
-        option.textContent = "No demo accounts provisioned";
-        accountSelect.appendChild(option);
-        accountSelect.disabled = true;
-        updateControls();
-        return;
-    }
-    config.accounts.forEach((account, idx) => {
-        const option = document.createElement("option");
-        option.value = account.id;
-        option.textContent = account.label || account.id;
-        if (idx === 0) {
-            option.selected = true;
-            currentAccount = account;
-        }
-        accountSelect.appendChild(option);
-    });
-    renderAccountDetails(currentAccount);
-    updateControls();
-}
-
-function renderAccountDetails(account) {
-    if (!accountDetailsEl) {
-        return;
-    }
-    if (!account) {
-        accountDetailsEl.textContent = "Select an account to see device and role details.";
-        return;
-    }
-    const roles = account.roles?.length ? account.roles.join(", ") : "—";
-    accountDetailsEl.innerHTML = `
-        <strong>${account.label}</strong>
-        <div>Device: <code>${account.deviceID}</code></div>
-        <div>User: <code>${account.userID || "n/a"}</code></div>
-        <div>Roles: ${roles}</div>
-        ${account.notes ? `<div class="notes">${account.notes}</div>` : ""}
-    `;
-}
-
-function selectAccountById(config, id) {
-    const account = config.accounts.find((entry) => entry.id === id) || config.accounts[0];
-    currentAccount = account;
-    renderAccountDetails(account);
-    updateControls();
-}
-
-function requireAccount() {
-    if (!currentAccount) {
-        throw new Error("Choose a demo account first");
-    }
-}
-
-function requireLogin() {
-    if (!loggedIn) {
-        throw new Error("Login first to use secure APIs");
-    }
-}
-
 function updateControls() {
-    if (!loginBtn) {
-        return;
-    }
-    const hasAccount = Boolean(currentAccount);
-    loginBtn.disabled = !hasAccount;
+    if (!loginBtn) return;
+
+    const isConnected = client.isReady;
+
+    // Login button and form inputs enabled when not logged in
+    if (loginBtn) loginBtn.disabled = loggedIn;
+    if (userIdInput) userIdInput.disabled = loggedIn;
+    if (userTokenInput) userTokenInput.disabled = loggedIn;
+
+    // Reset button enabled when connected
+    if (resetBtn) resetBtn.disabled = !isConnected && !loggedIn;
+
+    // Protected buttons enabled only when logged in
     protectedButtons.forEach((button) => {
         button.disabled = !loggedIn;
     });
-    if (resetBtn) {
-        resetBtn.disabled = !client.isReady && !loggedIn;
+}
+
+async function handleLogin(event) {
+    event.preventDefault();
+
+    const userID = userIdInput.value.trim();
+    const userToken = userTokenInput.value.trim();
+
+    if (!userID || !userToken) {
+        log("Error: User ID and User Token are required");
+        setStatus("Credentials required", "error");
+        return;
+    }
+
+    try {
+        log(`Authenticating user: ${userID}...`);
+        setStatus("Authenticating...", "idle");
+
+        // 1. Call /login to authenticate and get session config
+        const loginResp = await fetch("/login", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                user_id: userID,
+                user_token: userToken
+            })
+        });
+
+        if (!loginResp.ok) {
+            const err = await loginResp.text();
+            throw new Error(`Authentication failed: ${err}`);
+        }
+
+        const config = await loginResp.json();
+        log("Received session configuration from server", {
+            deviceID: config.deviceID,
+            hasDeviceSecret: !!config.deviceSecret,
+            hasGateSecrets: !!config.gateSecrets
+        });
+
+        // 2. Initialize SecureClient with WASM
+        await client.init();
+
+        // 3. Configure and perform handshake
+        const secureConfig = {
+            baseURL: config.baseURL || window.location.origin,
+            deviceID: config.deviceID,
+            deviceSecret: config.deviceSecret,
+            userToken: config.userToken,
+            handshakePath: config.handshakePath || "/handshake",
+            capabilityToken: config.capabilityToken,
+            gateSecrets: config.gateSecrets,
+            autoHandshake: true,
+        };
+
+        log("Initializing secure channel...");
+        await window.secureFetchInit(secureConfig);
+        log("Secure channel initialized, performing handshake...");
+
+        // Ensure handshake completes
+        await window.secureFetchHandshake(true);
+        log("Handshake completed successfully");
+
+        // Update client ready state
+        client.isReady = true;
+
+        // 4. Call the secure /api/login endpoint to establish application session
+        const appLoginPayload = {
+            username: userID,
+            purpose: "secure-login",
+            nonce: randomNonce(),
+        };
+
+        log("Calling /api/login to establish application session...");
+        const appLoginResp = await client.fetch("/api/login", appLoginPayload, "json");
+        log("Application login successful", appLoginResp);
+
+        currentUserID = userID;
+        loggedIn = true;
+        saveLoginState(userID, secureConfig);
+        updateControls();
+        setStatus(`✓ Logged in as ${userID}`, "ok");
+
+    } catch (err) {
+        log(`Login error: ${err.message}`);
+        // Try to extract more details from the error
+        if (err.response) {
+            log(`Error response:`, err.response);
+        }
+        if (err.stack) {
+            log(`Error stack:`, err.stack);
+        }
+        setStatus("Login failed: " + err.message, "error");
+        disconnectClient();
     }
 }
 
-updateControls();
-
-async function connectSelectedAccount() {
-    const lab = await labConfigPromise;
-    requireAccount();
-    // Let's ensure WASM is loaded first.
-    await client.init();
-
-    const cfg = {
-        baseURL: lab.baseURL,
-        deviceID: currentAccount.deviceID,
-        deviceSecret: currentAccount.deviceSecret,
-        userToken: currentAccount.userToken,
-        handshakePath: lab.handshakePath,
-        capabilityToken: lab.capabilityToken,
-        gateSecrets: lab.gateSecrets,
-        autoHandshake: true,
-    };
-
-    // Use the global exposed by WASM (loaded by client)
-    await window.secureFetchInit(cfg);
-
-    loggedIn = false;
-    saveLoginState();
-    updateControls();
-    setStatus(`Handshake pinned to ${currentAccount.label}. Login required.`, "idle");
-    const redacted = {
-        deviceID: cfg.deviceID,
-        gateSecrets: cfg.gateSecrets?.map((entry) => ({ id: entry.id, secret: "***" })),
-        capabilityToken: "***",
-        userToken: "***",
-        baseURL: cfg.baseURL,
-    };
-    log("secureFetchInit completed", redacted);
-}
-
-function disconnectClient(message = "Client reset") {
+function disconnectClient(message = "Session reset") {
     client.reset().catch(err => log("Reset error: " + err));
     loggedIn = false;
+    currentUserID = null;
     clearLoginState();
     updateControls();
-    setStatus("Not connected");
+    setStatus("Not connected", "idle");
     log(message);
 }
 
@@ -188,273 +178,210 @@ function randomNonce() {
     return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-function saveLoginState() {
-    if (!currentAccount) {
-        return;
-    }
+function saveLoginState(userID, sessionConfig) {
+    // Save session config to sessionStorage (cleared when tab closes)
     const state = {
-        accountId: currentAccount.id,
-        loggedIn: loggedIn,
-        clientReady: client.isReady,
+        userID: userID,
+        sessionConfig: sessionConfig,
         timestamp: Date.now(),
     };
     try {
-        localStorage.setItem("securefetch_login_state", JSON.stringify(state));
+        sessionStorage.setItem("securefetch_session", JSON.stringify(state));
     } catch (err) {
-        console.warn("Failed to save login state:", err);
+        log("Could not save session state");
     }
 }
 
 function clearLoginState() {
     try {
-        localStorage.removeItem("securefetch_login_state");
-    } catch (err) {
-        console.warn("Failed to clear login state:", err);
-    }
+        sessionStorage.removeItem("securefetch_session");
+    } catch (err) {}
 }
 
-async function restoreLoginState(config) {
+async function restoreLoginState() {
     try {
-        const stateJSON = localStorage.getItem("securefetch_login_state");
-        if (!stateJSON) {
-            return null;
-        }
+        const stateJSON = sessionStorage.getItem("securefetch_session");
+        if (!stateJSON) return null;
+
         const state = JSON.parse(stateJSON);
 
-        // Check if state is stale (older than 24 hours)
-        const maxAge = 24 * 60 * 60 * 1000;
-        if (Date.now() - state.timestamp > maxAge) {
+        // Session expired after 1 hour
+        if (Date.now() - state.timestamp > 60 * 60 * 1000) {
+            clearLoginState();
+            log("Session expired - please login again");
+            return null;
+        }
+
+        if (!state.sessionConfig) {
             clearLoginState();
             return null;
         }
 
-        // Find matching account
-        const account = config.accounts?.find((acc) => acc.id === state.accountId);
-        if (!account) {
+        log(`Restoring session for ${state.userID}...`);
+
+        // Reinitialize with saved config
+        await window.secureFetchInit(state.sessionConfig);
+        await window.secureFetchHandshake(true);
+
+        client.isReady = true;
+
+        // Verify session is still valid on server
+        try {
+            await client.fetch("/api/session/state", {}, "json");
+            currentUserID = state.userID;
+            loggedIn = true;
+            setStatus(`✓ Session restored - ${state.userID}`, "ok");
+            updateControls();
+            log("Session successfully restored");
+
+            // Update form fields
+            if (userIdInput) userIdInput.value = state.userID;
+            if (userTokenInput) userTokenInput.value = "";
+
+            return true;
+        } catch (err) {
+            log(`Session verification failed: ${err.message}`);
             clearLoginState();
             return null;
         }
-
-        currentAccount = account;
-        loggedIn = state.loggedIn || false;
-
-        if (accountSelect) {
-            accountSelect.value = account.id;
-        }
-        renderAccountDetails(account);
-        updateControls();
-
-        return {
-            account,
-            loggedIn: state.loggedIn || false,
-            clientReady: state.clientReady || false,
-        };
     } catch (err) {
-        console.warn("Failed to restore login state:", err);
+        console.warn("Session restore failed:", err);
         clearLoginState();
         return null;
     }
 }
 
-async function callSecureEndpoint(endpoint, body, description, allowAutoInit = false) {
-    // If not allowing auto init, we ensure client is loaded, but if we need a specific account config
-    // we must have called connectSelectedAccount already.
-    if (!allowAutoInit && !client.isReady) {
-         throw new Error("Login to establish a secure session first");
-    }
-
-    if (allowAutoInit && !client.isReady) {
-        await connectSelectedAccount();
-    }
-
-    const response = await client.fetch(endpoint, body, "json");
-    log(`${description} → 200`, response);
-    return response;
-}
-
-function accountSummary() {
-    return {
-        account: currentAccount?.id,
-        user: currentAccount?.userID,
-        roles: currentAccount?.roles,
-    };
-}
-
-async function handleLogin() {
-    requireAccount();
+async function callSecureEndpoint(endpoint, body, description) {
     if (!client.isReady) {
-         await connectSelectedAccount();
+        throw new Error("Not authenticated. Please login first.");
     }
 
-    const payload = {
-        username: currentAccount.userID,
-        purpose: "demo-login",
-        nonce: randomNonce(),
-    };
-    await callSecureEndpoint("/api/login", payload, "Login", true);
-    loggedIn = true;
-    saveLoginState();
-    updateControls();
-    setStatus(`Logged in as ${currentAccount.label}`, "ok");
+    try {
+        const response = await client.fetch(endpoint, body, "json");
+        log(`${description} → 200`, response);
+        return response;
+    } catch (err) {
+        log(`${description} error:`, err);
+        throw err;
+    }
 }
 
 async function handleSessionState() {
-    requireLogin();
-    await callSecureEndpoint("/api/session/state", {}, "Session state");
+    try {
+        await callSecureEndpoint("/api/session/state", {}, "Session state");
+    } catch (err) {
+        log(`Session state error: ${err.message}`);
+        setStatus("Error: " + err.message, "error");
+    }
 }
 
 async function handleEcho() {
-    requireLogin();
-    const payload = {
-        name: currentAccount?.label,
-        message: "Browser echo",
-        timestamp: new Date().toISOString(),
-    };
-    await callSecureEndpoint("/api/echo", payload, "Echo");
+    try {
+        await callSecureEndpoint("/api/echo", {
+            user: currentUserID,
+            message: "Browser echo test",
+            timestamp: new Date().toISOString(),
+        }, "Echo");
+    } catch (err) {
+        log(`Echo error: ${err.message}`);
+        setStatus("Error: " + err.message, "error");
+    }
 }
 
 async function handlePentest() {
-    requireLogin();
-    const payload = {
-        vector: "demo-probe",
-        payload: accountSummary(),
-        notes: "Triggered from browser lab",
-    };
-    await callSecureEndpoint("/api/pentest/probe", payload, "Pentest probe");
+    try {
+        await callSecureEndpoint("/api/pentest/probe", {
+            vector: "demo-probe",
+            payload: {
+                user: currentUserID,
+                source: "browser-lab"
+            },
+            notes: "Triggered from browser lab",
+        }, "Pentest probe");
+    } catch (err) {
+        log(`Pentest error: ${err.message}`);
+        setStatus("Error: " + err.message, "error");
+    }
 }
 
 async function handleLogout() {
-    requireLogin();
-    await callSecureEndpoint("/api/logout", {}, "Logout");
-    disconnectClient("Session closed");
-    setStatus("Logged out", "idle");
+    try {
+        if (client.isReady) {
+            await callSecureEndpoint("/api/logout", {}, "Logout");
+        }
+        disconnectClient("Logged out successfully");
+        setStatus("Logged out", "idle");
+
+        // Clear the form
+        if (userIdInput) userIdInput.value = "";
+        if (userTokenInput) userTokenInput.value = "";
+    } catch (err) {
+        log(`Logout error: ${err.message}`);
+        // Still disconnect even if API call fails
+        disconnectClient("Logged out (with errors)");
+        setStatus("Logged out", "idle");
+    }
 }
 
-document.addEventListener("DOMContentLoaded", () => {
+function handleReset() {
+    disconnectClient("Session reset by user");
+    if (userIdInput) userIdInput.value = "";
+    if (userTokenInput) userTokenInput.value = "";
+}
+
+document.addEventListener("DOMContentLoaded", async () => {
+    // Get DOM elements
     consoleEl = document.getElementById("console");
     statusEl = document.getElementById("status-indicator");
-    accountSelect = document.getElementById("account-select");
-    accountDetailsEl = document.getElementById("account-details");
-    resetBtn = document.getElementById("reset-btn");
+    loginForm = document.getElementById("login-form");
+    userIdInput = document.getElementById("user-id");
+    userTokenInput = document.getElementById("user-token");
     loginBtn = document.getElementById("login-btn");
+    resetBtn = document.getElementById("reset-btn");
     sessionBtn = document.getElementById("session-btn");
     echoBtn = document.getElementById("echo-btn");
     pentestBtn = document.getElementById("pentest-btn");
     logoutBtn = document.getElementById("logout-btn");
-    protectedButtons.splice(0, protectedButtons.length, sessionBtn, echoBtn, pentestBtn, logoutBtn);
+
+    // Register protected buttons
+    protectedButtons.push(sessionBtn, echoBtn, pentestBtn, logoutBtn);
+
+    // Set initial state
     updateControls();
 
-    if (accountSelect) {
-        accountSelect.addEventListener("change", async (event) => {
-            const lab = await labConfigPromise;
-            selectAccountById(lab, event.target.value);
-            if (client.isReady || loggedIn) {
-                disconnectClient("Account switched; session cleared");
-            }
-        });
+    // Attach event listeners
+    if (loginForm) {
+        loginForm.addEventListener("submit", handleLogin);
     }
 
     if (resetBtn) {
-        resetBtn.addEventListener("click", () => {
-            disconnectClient("Session reset by user");
-        });
-    }
-
-    if (loginBtn) {
-        loginBtn.addEventListener("click", () => {
-            handleLogin().catch((err) => {
-                log(`Login error: ${err.message}`);
-                setStatus("Error: " + err.message, "error");
-            });
-        });
+        resetBtn.addEventListener("click", handleReset);
     }
 
     if (sessionBtn) {
-        sessionBtn.addEventListener("click", () => {
-            handleSessionState().catch((err) => {
-                log(`Session state error: ${err.message}`);
-            });
-        });
+        sessionBtn.addEventListener("click", handleSessionState);
     }
 
     if (echoBtn) {
-        echoBtn.addEventListener("click", () => {
-            handleEcho().catch((err) => {
-                log(`Echo error: ${err.message}`);
-            });
-        });
+        echoBtn.addEventListener("click", handleEcho);
     }
 
     if (pentestBtn) {
-        pentestBtn.addEventListener("click", () => {
-            handlePentest().catch((err) => {
-                log(`Pentest error: ${err.message}`);
-            });
-        });
+        pentestBtn.addEventListener("click", handlePentest);
     }
 
     if (logoutBtn) {
-        logoutBtn.addEventListener("click", () => {
-            handleLogout().catch((err) => {
-                log(`Logout error: ${err.message}`);
-            });
-        });
+        logoutBtn.addEventListener("click", handleLogout);
     }
 
-    (async () => {
-        try {
-            await client.init();
-            const lab = await labConfigPromise;
-            renderAccounts(lab);
+    // Initialize WASM client
+    try {
+        await client.init();
+        log("SecureClient WASM initialized");
 
-            // Try to restore previous session
-            const restoredState = await restoreLoginState(lab);
-            if (restoredState && restoredState.clientReady) {
-                // Reinitialize the client with restored account
-                try {
-                    const cfg = {
-                        baseURL: lab.baseURL,
-                        deviceID: restoredState.account.deviceID,
-                        deviceSecret: restoredState.account.deviceSecret,
-                        userToken: restoredState.account.userToken,
-                        handshakePath: lab.handshakePath,
-                        capabilityToken: lab.capabilityToken,
-                        gateSecrets: lab.gateSecrets,
-                        autoHandshake: false, // Don't auto handshake, try to restore first
-                    };
-                    await window.secureFetchInit(cfg);
-
-                    // Verify the restored session works by checking session state
-                    if (restoredState.loggedIn) {
-                        try {
-                            await client.fetch("/api/session/state", {}, "json");
-                            setStatus(`Session restored - ${restoredState.account.label}`, "ok");
-                            log("Session successfully restored and verified", {
-                                account: restoredState.account.id,
-                                loggedIn: true,
-                            });
-                        } catch (err) {
-                            log(`Session verification failed: ${err.message}`);
-                            disconnectClient("Stored session expired");
-                        }
-                    } else {
-                        setStatus(`Handshake restored - ${restoredState.account.label}`, "idle");
-                        log("Handshake restored, login required");
-                    }
-                } catch (err) {
-                    log(`Session restore failed: ${err.message}`);
-                    disconnectClient("Failed to restore session");
-                }
-            }
-
-            log("Lab config ready", {
-                accounts: lab.accounts?.length || 0,
-                baseURL: lab.baseURL,
-                gateSecretIDs: lab.gateSecrets?.map((s) => s.id) || [],
-                sessionRestored: restoredState?.clientReady || false,
-            });
-        } catch (err) {
-            log(`Bootstrap error: ${err.message}`);
-        }
-    })();
+        // Try to restore previous session
+        await restoreLoginState();
+    } catch (err) {
+        log(`Initialization error: ${err.message}`);
+    }
 });

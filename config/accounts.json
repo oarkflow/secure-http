@@ -1,0 +1,18 @@
+{
+    "accounts": [
+        {
+            "id": "owner",
+            "label": "Owner – Admin",
+            "userID": "user-123",
+            "userToken": "user-token-123",
+            "roles": [ "admin", "device-owner" ]
+        },
+        {
+            "id": "operator",
+            "label": "Operator",
+            "userID": "user-456",
+            "userToken": "user-token-456",
+            "roles": [ "operator" ]
+        }
+    ]
+}

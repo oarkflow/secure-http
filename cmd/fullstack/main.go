@@ -1,6 +1,9 @@
 package main
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -45,6 +48,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("load server config: %v", err)
 	}
+
 	if err := ensureStaticBundle(*webRoot); err != nil {
 		log.Fatalf("static assets: %v", err)
 	}
@@ -109,6 +113,18 @@ func main() {
 	app.Use(logger.New())
 
 	prefix := normalizePrefix(*staticPrefix)
+	// Mount the entire web directory at the root to ensure cross-module imports work
+	// e.g. /demo/app.js can import from /client/src/index.js
+	app.Static("/", "web", fiber.Static{
+		Compress:      true,
+		Browse:        true,
+		Index:         "index.html",
+		CacheDuration: 30 * time.Minute,
+		MaxAge:        600,
+	})
+
+	// Also keep the demo prefix static for backward compatibility if needed,
+	// but mapping to the specific demo folder.
 	app.Static(prefix, *webRoot, fiber.Static{
 		Compress:      true,
 		Browse:        true,
@@ -116,6 +132,7 @@ func main() {
 		CacheDuration: 30 * time.Minute,
 		MaxAge:        600,
 	})
+
 	app.Get("/", func(c *fiber.Ctx) error {
 		target := prefix
 		if !strings.HasSuffix(target, "/") {
@@ -125,9 +142,10 @@ func main() {
 	})
 
 	gateMiddleware := httpmw.NewGateMiddleware(gatekeeper)
-	app.Use(gateMiddleware.Handle())
 
-	app.Post("/handshake", cryptoMiddleware.Handshake())
+	// Apply GateMiddleware only to routes that require gate tokens
+	app.Post("/handshake", gateMiddleware.Handle(), cryptoMiddleware.Handshake())
+
 	app.Get("/health", func(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{
 			"status":   "healthy",
@@ -136,8 +154,11 @@ func main() {
 	})
 
 	api := app.Group("/api")
+	api.Use(gateMiddleware.Handle()) // Gate applies to all encrypted APIs
 	api.Use(cryptoMiddleware.Decrypt())
 	api.Use(cryptoMiddleware.Encrypt())
+
+	app.Post("/login", handleLogon(cfg, userAuth, deviceRegistry))
 
 	registerSecureRoutes(api, auditLogger, cryptoMiddleware.GetSessionManager())
 
@@ -479,4 +500,67 @@ func userID(ctx *security.UserContext) string {
 		return ""
 	}
 	return ctx.ID
+}
+
+func handleLogon(cfg *config.ServerConfig, userAuth security.UserAuthenticator, deviceRegistry security.DeviceRegistry) fiber.Handler {
+	type loginReq struct {
+		UserID    string `json:"user_id"`
+		UserToken string `json:"user_token"`
+	}
+	return func(c *fiber.Ctx) error {
+		var req loginReq
+		if err := c.BodyParser(&req); err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request"})
+		}
+
+		// Validate user token
+		userCtx, err := userAuth.Validate(req.UserToken)
+		if err != nil {
+			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "Invalid token"})
+		}
+
+		if req.UserID != "" && userCtx.ID != req.UserID {
+			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "User ID mismatch"})
+		}
+
+		// Calculate device secret based on user token for "natural" derivation
+		// For demo: hmac(token, "device-key")
+		h := hmac.New(sha256.New, []byte("demo-device-derivation-key"))
+		h.Write([]byte(req.UserToken))
+		derivedSecret := h.Sum(nil)
+
+		deviceID := fmt.Sprintf("%s-device", userCtx.ID)
+
+		// Map it into the registry so the Handshake middleware can find it later
+		if reg, ok := deviceRegistry.(*security.InMemoryDeviceRegistry); ok {
+			reg.Register(deviceID, derivedSecret)
+		}
+
+		gateSecrets := make([]fiber.Map, 0)
+		for _, s := range cfg.Gate.Secrets {
+			gateSecrets = append(gateSecrets, fiber.Map{
+				"id":     s.ID,
+				"secret": s.Material,
+			})
+		}
+
+		var capabilityToken string
+		if len(cfg.Capabilities) > 0 {
+			capabilityToken = cfg.Capabilities[0].Token
+		}
+
+		return c.JSON(fiber.Map{
+			"status":   200,
+			"success":  true,
+			"deviceID": deviceID,
+			// Return as base64: prefixed string for the JS client
+			"deviceSecret":    "base64:" + base64.StdEncoding.EncodeToString(derivedSecret),
+			"gateSecrets":     gateSecrets,
+			"capabilityToken": capabilityToken,
+			"handshakePath":   "/handshake",
+			"baseURL":         "",
+			"userToken":       req.UserToken,
+			"userID":          userCtx.ID,
+		})
+	}
 }

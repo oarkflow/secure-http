@@ -107,8 +107,8 @@ GOOS=js GOARCH=wasm go build -o web/securefetch-demo/securefetch.wasm ./cmd/secu
 cp "$(go env GOROOT)/misc/wasm/wasm_exec.js" web/securefetch-demo/
 
 # Launch the integrated lab
-SECURE_HTTP_CONFIG=config/server.json \
-  go run ./cmd/fullstack \
+go run ./cmd/fullstack \
+    -config config/server.json \
     -web web/securefetch-demo \
     -static-prefix /lab \
     -addr :8443
@@ -122,6 +122,12 @@ This binary reuses the exact same crypto middleware and gatekeeper configuration
   - `POST /api/session/state` — Shows session issuance time, expiry, and whether the fingerprint binding still matches the caller (proves persistence protections work).
   - `POST /api/logout` — Explicitly invalidates the encrypted session, deletes it server-side, and emits a logout audit event.
   - `POST /api/pentest/probe` — Accepts arbitrary JSON describing an attack vector and records it as an `pentest_probe` audit event so you can validate alert fan-out.
-- Ships with a curated browser UI that auto-loads [web/securefetch-demo/lab-config.json](web/securefetch-demo/lab-config.json); you just select one of the demo accounts, hit **Login**, and drive the session/echo/pentest/logout flows without ever exposing real credentials.
+- Provides a browser UI with a login form where users enter their `user_id` and `user_token` credentials. Upon submission:
+  1. The client sends credentials to `/login` (unauthenticated endpoint)
+  2. Server validates the credentials and returns session configuration (deviceID, deviceSecret, gateSecrets, capabilityToken)
+  3. Client initializes the WASM bridge with the returned configuration
+  4. Client performs the handshake automatically (`/handshake`)
+  5. Client calls `/api/login` (encrypted endpoint) to establish the application session
+  6. All subsequent protected API calls use the encrypted channel with proper session binding
 
 Static assets remain unauthenticated so you can load the UI, but every handshake and API call beneath `/api` still requires the pre-HTTP gate headers plus encrypted payloads. That makes it ideal for side-by-side “legit user vs. attacker” exercises or demos where you want to showcase the full secure channel without orchestrating multiple servers.
