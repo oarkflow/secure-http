@@ -1,19 +1,40 @@
 .PHONY: build-wasm run-server run-web test clean
 
+# Known wasm_exec.js locations (ordered by priority)
+WASM_EXEC_PATHS := \
+	$(shell go env GOROOT)/lib/wasm/wasm_exec.js \
+	$(shell go env GOROOT)/misc/wasm/wasm_exec.js \
+	/usr/lib/go/lib/wasm/wasm_exec.js \
+	/usr/lib/go/misc/wasm/wasm_exec.js \
+	/usr/share/go/lib/wasm/wasm_exec.js \
+	/usr/share/go/misc/wasm/wasm_exec.js
+
+# Find first existing wasm_exec.js
+WASM_EXEC := $(firstword $(wildcard $(WASM_EXEC_PATHS)))
+
 # Build the secureFetch WASM module and copy runtime shim
 build-wasm:
 	@echo "Building securefetch.wasm..."
 	GOOS=js GOARCH=wasm go build -o web/securefetch-demo/securefetch.wasm ./cmd/securefetchwasm
-	@echo "Copying wasm_exec.js..."
-	@if [ -f "$$(go env GOROOT)/misc/wasm/wasm_exec.js" ]; then \
-		cp "$$(go env GOROOT)/misc/wasm/wasm_exec.js" web/securefetch-demo/; \
-	else \
-		echo "Warning: wasm_exec.js not found at $$(go env GOROOT)/misc/wasm/wasm_exec.js."; \
-		echo "Please copy it manually from your Go installation's misc/wasm/ directory."; \
+
+	@echo "Searching for wasm_exec.js..."
+	@if [ -z "$(WASM_EXEC)" ]; then \
+		echo "ERROR: wasm_exec.js not found in any known Go locations."; \
+		echo "Searched:"; \
+		for p in $(WASM_EXEC_PATHS); do echo "  - $$p"; done; \
+		echo ""; \
+		echo "Fix:"; \
+		echo "  • Ensure Go is properly installed"; \
+		echo "  • Or manually copy wasm_exec.js into web/securefetch-demo/"; \
+		exit 1; \
 	fi
+
+	@echo "Found wasm_exec.js at: $(WASM_EXEC)"
+	cp "$(WASM_EXEC)" web/securefetch-demo/
+
 	@echo "WASM build complete. Files in web/securefetch-demo/"
 
-# Run the secure HTTP server (handles encrypted requests)
+# Run the secure HTTP server
 run-server:
 	@echo "Starting secure server on :8443..."
 	go run ./cmd/server/main.go
@@ -23,7 +44,7 @@ run-web:
 	@echo "Starting web server on :8082..."
 	go run ./cmd/securefetchweb -addr :8082 -dir web/securefetch-demo
 
-# Build WASM and run both servers in background for testing
+# Build WASM and run both servers
 test: build-wasm
 	@echo "Starting servers for testing..."
 	@echo "Secure server: http://localhost:8443"

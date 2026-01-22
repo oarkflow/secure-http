@@ -1,12 +1,20 @@
-const consoleEl = document.getElementById("console");
-const statusEl = document.getElementById("status-indicator");
-const initForm = document.getElementById("init-form");
-const requestForm = document.getElementById("request-form");
-const handshakeBtn = document.getElementById("handshake-btn");
-const resetBtn = document.getElementById("reset-btn");
+let consoleEl;
+let statusEl;
+let accountSelect;
+let accountDetailsEl;
+let resetBtn;
+let loginBtn;
+let sessionBtn;
+let echoBtn;
+let pentestBtn;
+let logoutBtn;
 
 let clientReady = false;
+let loggedIn = false;
+let currentAccount = null;
 const wasmReady = bootWasm();
+const labConfigPromise = loadLabConfig();
+const protectedButtons = [];
 
 function log(message, payload) {
     const time = new Date().toISOString();
@@ -20,10 +28,17 @@ function log(message, payload) {
             entry += `\n${payload}`;
         }
     }
+    if (!consoleEl) {
+        console.log(entry);
+        return;
+    }
     consoleEl.textContent = `${entry}\n${consoleEl.textContent}`.slice(0, 5000);
 }
 
 function setStatus(text, variant = "idle") {
+    if (!statusEl) {
+        return;
+    }
     statusEl.textContent = text;
     statusEl.dataset.variant = variant;
 }
@@ -44,115 +59,298 @@ async function bootWasm() {
     log("securefetch.wasm loaded");
 }
 
-function buildDeviceSecret(format, value) {
-    const trimmed = value.trim();
-    if (!trimmed) {
-        throw new Error("Device secret is required");
+async function loadLabConfig() {
+    const resp = await fetch("lab-config.json", { cache: "no-cache" });
+    if (!resp.ok) {
+        throw new Error(`Unable to load lab-config.json (${resp.status})`);
     }
-    switch (format) {
-        case "text":
-            return trimmed;
-        case "base64":
-            return trimmed.startsWith("base64:") ? trimmed : `base64:${trimmed}`;
-        case "bytes": {
-            const parts = trimmed
-                .split(/[,\s]+/)
-                .filter(Boolean)
-                .map((part) => {
-                    const num = Number(part.trim());
-                    if (!Number.isInteger(num) || num < 0 || num > 255) {
-                        throw new Error(`Invalid byte value: ${part}`);
-                    }
-                    return num;
-                });
-            if (!parts.length) {
-                throw new Error("Provide at least one byte value");
-            }
-            return new Uint8Array(parts);
+    const cfg = await resp.json();
+    cfg.baseURL = cfg.baseURL?.trim() || window.location.origin;
+    return cfg;
+}
+
+function renderAccounts(config) {
+    if (!accountSelect) {
+        return;
+    }
+    accountSelect.innerHTML = "";
+    if (!config.accounts?.length) {
+        const option = document.createElement("option");
+        option.value = "";
+        option.textContent = "No demo accounts provisioned";
+        accountSelect.appendChild(option);
+        accountSelect.disabled = true;
+        updateControls();
+        return;
+    }
+    config.accounts.forEach((account, idx) => {
+        const option = document.createElement("option");
+        option.value = account.id;
+        option.textContent = account.label || account.id;
+        if (idx === 0) {
+            option.selected = true;
+            currentAccount = account;
         }
-        default:
-            return trimmed;
+        accountSelect.appendChild(option);
+    });
+    renderAccountDetails(currentAccount);
+    updateControls();
+}
+
+function renderAccountDetails(account) {
+    if (!accountDetailsEl) {
+        return;
+    }
+    if (!account) {
+        accountDetailsEl.textContent = "Select an account to see device and role details.";
+        return;
+    }
+    const roles = account.roles?.length ? account.roles.join(", ") : "—";
+    accountDetailsEl.innerHTML = `
+        <strong>${account.label}</strong>
+        <div>Device: <code>${account.deviceID}</code></div>
+        <div>User: <code>${account.userID || "n/a"}</code></div>
+        <div>Roles: ${roles}</div>
+        ${account.notes ? `<div class="notes">${account.notes}</div>` : ""}
+    `;
+}
+
+function selectAccountById(config, id) {
+    const account = config.accounts.find((entry) => entry.id === id) || config.accounts[0];
+    currentAccount = account;
+    renderAccountDetails(account);
+    updateControls();
+}
+
+function requireAccount() {
+    if (!currentAccount) {
+        throw new Error("Choose a demo account first");
     }
 }
 
-function parseJSON(value) {
-    if (!value || !value.trim()) {
-        return null;
-    }
-    try {
-        return JSON.parse(value);
-    } catch (err) {
-        throw new Error(`Body must be valid JSON: ${err.message}`);
+function requireLogin() {
+    if (!loggedIn) {
+        throw new Error("Login first to use secure APIs");
     }
 }
 
-initForm.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    try {
-        await wasmReady;
-        const form = new FormData(initForm);
-        const cfg = {
-            baseURL: form.get("baseURL").trim(),
-            deviceID: form.get("deviceID").trim(),
-            deviceSecret: buildDeviceSecret(form.get("secretFormat"), form.get("deviceSecret")),
-            userToken: form.get("userToken").trim() || undefined,
-            handshakePath: form.get("handshakePath").trim() || undefined,
-            autoHandshake: form.get("autoHandshake") !== null,
-        };
-
-        await secureFetchInit(cfg);
-        clientReady = true;
-        setStatus("Client ready", "ok");
-        log("secureFetchInit completed", cfg);
-    } catch (err) {
-        clientReady = false;
-        setStatus("Init failed", "error");
-        log(`Init error: ${err.message}`);
+function updateControls() {
+    if (!loginBtn) {
+        return;
     }
-});
-
-requestForm.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    try {
-        await wasmReady;
-        if (!clientReady) {
-            throw new Error("Initialize the client first");
-        }
-        const form = new FormData(requestForm);
-        const body = parseJSON(form.get("body"));
-        const req = {
-            endpoint: form.get("endpoint").trim(),
-            body,
-            responseType: form.get("responseType"),
-            forceHandshake: form.get("forceHandshake") !== null,
-        };
-        const response = await secureFetch(req);
-        log(`secureFetch → ${req.responseType}`, response);
-    } catch (err) {
-        log(`Request error: ${err.message}`);
+    const hasAccount = Boolean(currentAccount);
+    loginBtn.disabled = !hasAccount;
+    protectedButtons.forEach((button) => {
+        button.disabled = !loggedIn;
+    });
+    if (resetBtn) {
+        resetBtn.disabled = !clientReady && !loggedIn;
     }
-});
+}
 
-handshakeBtn.addEventListener("click", async () => {
-    try {
-        await wasmReady;
-        if (!clientReady) {
-            throw new Error("Initialize the client first");
-        }
-        await secureFetchHandshake(true);
-        log("Handshake completed");
-        setStatus("Client ready", "ok");
-    } catch (err) {
-        log(`Handshake error: ${err.message}`);
-        setStatus("Handshake failed", "error");
+updateControls();
+
+async function ensureClientReady(allowAutoInit = false) {
+    await wasmReady;
+    if (clientReady) {
+        return;
     }
-});
+    if (!allowAutoInit) {
+        throw new Error("Login to establish a secure session first");
+    }
+    await connectSelectedAccount();
+}
 
-resetBtn.addEventListener("click", () => {
+async function connectSelectedAccount() {
+    const lab = await labConfigPromise;
+    requireAccount();
+    await wasmReady;
+    const cfg = {
+        baseURL: lab.baseURL,
+        deviceID: currentAccount.deviceID,
+        deviceSecret: currentAccount.deviceSecret,
+        userToken: currentAccount.userToken,
+        handshakePath: lab.handshakePath,
+        capabilityToken: lab.capabilityToken,
+        gateSecrets: lab.gateSecrets,
+        autoHandshake: true,
+    };
+    await secureFetchInit(cfg);
+    clientReady = true;
+    loggedIn = false;
+    updateControls();
+    setStatus(`Handshake pinned to ${currentAccount.label}. Login required.`, "idle");
+    const redacted = {
+        deviceID: cfg.deviceID,
+        gateSecrets: cfg.gateSecrets?.map((entry) => ({ id: entry.id, secret: "***" })),
+        capabilityToken: "***",
+        userToken: "***",
+        baseURL: cfg.baseURL,
+    };
+    log("secureFetchInit completed", redacted);
+}
+
+function disconnectClient(message = "Client reset") {
     if (typeof secureFetchReset === "function") {
         secureFetchReset();
     }
     clientReady = false;
-    setStatus("Not initialized");
-    log("secureFetch client reset");
+    loggedIn = false;
+    updateControls();
+    setStatus("Not connected");
+    log(message);
+}
+
+function randomNonce() {
+    const bytes = crypto.getRandomValues(new Uint8Array(12));
+    return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function callSecureEndpoint(endpoint, body, description, allowAutoInit = false) {
+    await ensureClientReady(allowAutoInit);
+    const response = await secureFetch({
+        endpoint,
+        body,
+        responseType: "json",
+    });
+    log(`${description} → 200`, response);
+    return response;
+}
+
+function accountSummary() {
+    return {
+        account: currentAccount?.id,
+        user: currentAccount?.userID,
+        roles: currentAccount?.roles,
+    };
+}
+
+async function handleLogin() {
+    requireAccount();
+    const payload = {
+        username: currentAccount.userID,
+        purpose: "demo-login",
+        nonce: randomNonce(),
+    };
+    await callSecureEndpoint("/api/login", payload, "Login", true);
+    loggedIn = true;
+    updateControls();
+    setStatus(`Logged in as ${currentAccount.label}`, "ok");
+}
+
+async function handleSessionState() {
+    requireLogin();
+    await callSecureEndpoint("/api/session/state", {}, "Session state");
+}
+
+async function handleEcho() {
+    requireLogin();
+    const payload = {
+        name: currentAccount?.label,
+        message: "Browser echo",
+        timestamp: new Date().toISOString(),
+    };
+    await callSecureEndpoint("/api/echo", payload, "Echo");
+}
+
+async function handlePentest() {
+    requireLogin();
+    const payload = {
+        vector: "demo-probe",
+        payload: accountSummary(),
+        notes: "Triggered from browser lab",
+    };
+    await callSecureEndpoint("/api/pentest/probe", payload, "Pentest probe");
+}
+
+async function handleLogout() {
+    requireLogin();
+    await callSecureEndpoint("/api/logout", {}, "Logout");
+    disconnectClient("Session closed");
+    setStatus("Logged out", "idle");
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+    consoleEl = document.getElementById("console");
+    statusEl = document.getElementById("status-indicator");
+    accountSelect = document.getElementById("account-select");
+    accountDetailsEl = document.getElementById("account-details");
+    resetBtn = document.getElementById("reset-btn");
+    loginBtn = document.getElementById("login-btn");
+    sessionBtn = document.getElementById("session-btn");
+    echoBtn = document.getElementById("echo-btn");
+    pentestBtn = document.getElementById("pentest-btn");
+    logoutBtn = document.getElementById("logout-btn");
+    protectedButtons.splice(0, protectedButtons.length, sessionBtn, echoBtn, pentestBtn, logoutBtn);
+    updateControls();
+
+    if (accountSelect) {
+        accountSelect.addEventListener("change", async (event) => {
+            const lab = await labConfigPromise;
+            selectAccountById(lab, event.target.value);
+            if (clientReady || loggedIn) {
+                disconnectClient("Account switched; session cleared");
+            }
+        });
+    }
+
+    if (resetBtn) {
+        resetBtn.addEventListener("click", () => {
+            disconnectClient("Session reset by user");
+        });
+    }
+
+    if (loginBtn) {
+        loginBtn.addEventListener("click", () => {
+            handleLogin().catch((err) => {
+                log(`Login error: ${err.message}`);
+            });
+        });
+    }
+
+    if (sessionBtn) {
+        sessionBtn.addEventListener("click", () => {
+            handleSessionState().catch((err) => {
+                log(`Session state error: ${err.message}`);
+            });
+        });
+    }
+
+    if (echoBtn) {
+        echoBtn.addEventListener("click", () => {
+            handleEcho().catch((err) => {
+                log(`Echo error: ${err.message}`);
+            });
+        });
+    }
+
+    if (pentestBtn) {
+        pentestBtn.addEventListener("click", () => {
+            handlePentest().catch((err) => {
+                log(`Pentest error: ${err.message}`);
+            });
+        });
+    }
+
+    if (logoutBtn) {
+        logoutBtn.addEventListener("click", () => {
+            handleLogout().catch((err) => {
+                log(`Logout error: ${err.message}`);
+            });
+        });
+    }
+
+    (async () => {
+        try {
+            const lab = await labConfigPromise;
+            renderAccounts(lab);
+            log("Lab config ready", {
+                accounts: lab.accounts?.length || 0,
+                baseURL: lab.baseURL,
+                gateSecretIDs: lab.gateSecrets?.map((s) => s.id) || [],
+            });
+        } catch (err) {
+            log(`Bootstrap error: ${err.message}`);
+        }
+    })();
 });

@@ -38,6 +38,33 @@ section {
   box-shadow: 0 20px 35px rgb(15 15 15 / 0.35);
 }
 
+.notice {
+  margin-top: 1rem;
+  padding: 1rem 1.2rem;
+  border-radius: 12px;
+  background: #0d1a31;
+  border: 1px solid #334155;
+  box-shadow: inset 0 0 0 1px rgb(56 189 248 / 0.2);
+}
+
+.account-details {
+  padding: 1rem;
+  border-radius: 10px;
+  background: #0f172a;
+  border: 1px solid #334155;
+  line-height: 1.4;
+}
+
+.account-details code {
+  font-size: 0.85rem;
+}
+
+.account-details .notes {
+  margin-top: 0.4rem;
+  font-size: 0.85rem;
+  color: #cbd5f5;
+}
+
 label {
   display: flex;
   flex-direction: column;
@@ -86,6 +113,24 @@ button {
 button:hover {
   filter: brightness(1.1);
   transform: translateY(-1px);
+}
+
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+#status-indicator[data-variant="error"] {
+  color: #f87171;
+}
+
+#status-indicator[data-variant="ok"] {
+  color: #34d399;
+}
+
+.action-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.8rem;
 }
 
 .actions {

@@ -3,10 +3,14 @@ package client
 import (
 	"bytes"
 	"crypto/ecdh"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -20,6 +24,20 @@ const (
 	headerUserToken = "X-User-Token"
 )
 
+// GateSecret identifies a rotating pre-routing secret.
+type GateSecret struct {
+	ID     string
+	Secret []byte
+}
+
+// GateClientConfig describes the pre-routing crypto gate options.
+type GateClientConfig struct {
+	Secrets         []GateSecret
+	CapabilityToken string
+	Headers         security.GateHeaders
+	NonceSize       int
+}
+
 // SecureClient handles encrypted communication with the server
 type SecureClient struct {
 	baseURL       string
@@ -31,6 +49,10 @@ type SecureClient struct {
 	deviceID      string
 	deviceSecret  []byte
 	userToken     string
+	gateHeaders   security.GateHeaders
+	gateSecrets   []GateSecret
+	capability    string
+	nonceSize     int
 	mu            sync.RWMutex
 }
 
@@ -51,6 +73,7 @@ type Config struct {
 	UserToken     string
 	HTTPClient    *http.Client
 	HandshakePath string
+	Gate          GateClientConfig
 }
 
 // SetUserToken updates the active user token for subsequent requests.
@@ -58,6 +81,108 @@ func (c *SecureClient) SetUserToken(token string) {
 	c.mu.Lock()
 	c.userToken = token
 	c.mu.Unlock()
+}
+
+func cloneGateSecrets(src []GateSecret) []GateSecret {
+	if len(src) == 0 {
+		return nil
+	}
+	clones := make([]GateSecret, 0, len(src))
+	for _, s := range src {
+		if s.ID == "" || len(s.Secret) == 0 {
+			continue
+		}
+		secretCopy := make([]byte, len(s.Secret))
+		copy(secretCopy, s.Secret)
+		clones = append(clones, GateSecret{ID: s.ID, Secret: secretCopy})
+	}
+	return clones
+}
+
+func (c *SecureClient) applyGateHeaders(req *http.Request, method, endpoint string) error {
+	c.mu.RLock()
+	headers := c.gateHeaders
+	capability := c.capability
+	nonceSize := c.nonceSize
+	secrets := c.gateSecrets
+	c.mu.RUnlock()
+
+	if capability == "" {
+		return fmt.Errorf("capability token missing")
+	}
+	if len(secrets) == 0 {
+		return fmt.Errorf("gate secret missing")
+	}
+	secret := secrets[0]
+	if secret.ID == "" || len(secret.Secret) == 0 {
+		return fmt.Errorf("gate secret invalid")
+	}
+	nonce, err := randomNonce(nonceSize)
+	if err != nil {
+		return fmt.Errorf("gate nonce: %w", err)
+	}
+	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
+	path := canonicalPath(endpoint)
+	payload := gateCanonicalPayload(method, path, timestamp, nonce, capability)
+	mac := crypto.ComputeHMAC(secret.Secret, payload)
+
+	req.Header.Set(headers.SecretID, secret.ID)
+	req.Header.Set(headers.Timestamp, timestamp)
+	req.Header.Set(headers.Nonce, nonce)
+	req.Header.Set(headers.Signature, base64.StdEncoding.EncodeToString(mac))
+	req.Header.Set(headers.Capability, capability)
+	return nil
+}
+
+func gateCanonicalPayload(method, path, timestamp, nonce, capability string) []byte {
+	builder := strings.Builder{}
+	builder.WriteString(strings.ToUpper(method))
+	builder.WriteString("\n")
+	builder.WriteString(path)
+	builder.WriteString("\n")
+	builder.WriteString(timestamp)
+	builder.WriteString("\n")
+	builder.WriteString(nonce)
+	builder.WriteString("\n")
+	builder.WriteString(capability)
+	return []byte(builder.String())
+}
+
+func canonicalPath(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "/"
+	}
+	if strings.HasPrefix(trimmed, "http://") || strings.HasPrefix(trimmed, "https://") {
+		if parsed, err := url.Parse(trimmed); err == nil {
+			if parsed.Path != "" {
+				trimmed = parsed.Path
+			} else {
+				trimmed = "/"
+			}
+		}
+	}
+	if idx := strings.Index(trimmed, "?"); idx >= 0 {
+		trimmed = trimmed[:idx]
+	}
+	if trimmed == "" {
+		return "/"
+	}
+	if !strings.HasPrefix(trimmed, "/") {
+		trimmed = "/" + trimmed
+	}
+	return trimmed
+}
+
+func randomNonce(size int) (string, error) {
+	if size < 12 {
+		size = 12
+	}
+	buf := make([]byte, size)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(buf), nil
 }
 
 func (cs *ClientSession) isExpired() bool {
@@ -92,6 +217,13 @@ func NewSecureClient(cfg Config) (*SecureClient, error) {
 	if len(cfg.DeviceSecret) == 0 {
 		return nil, fmt.Errorf("device secret is required")
 	}
+	gateSecrets := cloneGateSecrets(cfg.Gate.Secrets)
+	if len(gateSecrets) == 0 {
+		return nil, fmt.Errorf("gate secret is required")
+	}
+	if strings.TrimSpace(cfg.Gate.CapabilityToken) == "" {
+		return nil, fmt.Errorf("capability token is required")
+	}
 	privKey, pubKey, err := crypto.GenerateKeyPair()
 	if err != nil {
 		return nil, err
@@ -109,6 +241,11 @@ func NewSecureClient(cfg Config) (*SecureClient, error) {
 	}
 	secretCopy := make([]byte, len(cfg.DeviceSecret))
 	copy(secretCopy, cfg.DeviceSecret)
+	nonceSize := cfg.Gate.NonceSize
+	if nonceSize <= 0 {
+		nonceSize = 16
+	}
+	gateHeaders := cfg.Gate.Headers.WithDefaults()
 
 	return &SecureClient{
 		baseURL:       cfg.BaseURL,
@@ -119,6 +256,10 @@ func NewSecureClient(cfg Config) (*SecureClient, error) {
 		deviceID:      cfg.DeviceID,
 		deviceSecret:  secretCopy,
 		userToken:     cfg.UserToken,
+		gateHeaders:   gateHeaders,
+		gateSecrets:   gateSecrets,
+		capability:    strings.TrimSpace(cfg.Gate.CapabilityToken),
+		nonceSize:     nonceSize,
 	}, nil
 }
 
@@ -140,11 +281,20 @@ func (c *SecureClient) Handshake() error {
 		return fmt.Errorf("failed to marshal request: %w", err)
 	}
 
-	resp, err := c.httpClient.Post(
+	httpReq, err := http.NewRequest(
+		http.MethodPost,
 		c.baseURL+c.handshakePath,
-		"application/json",
 		bytes.NewReader(reqBody),
 	)
+	if err != nil {
+		return fmt.Errorf("handshake request failed: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	if err := c.applyGateHeaders(httpReq, http.MethodPost, c.handshakePath); err != nil {
+		return err
+	}
+
+	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
 		return fmt.Errorf("handshake request failed: %w", err)
 	}
@@ -257,6 +407,9 @@ func (c *SecureClient) Post(endpoint string, data interface{}) ([]byte, error) {
 	req.Header.Set(headerSessionID, session.SessionID)
 	if userToken != "" {
 		req.Header.Set(headerUserToken, userToken)
+	}
+	if err := c.applyGateHeaders(req, http.MethodPost, endpoint); err != nil {
+		return nil, err
 	}
 
 	// Send request

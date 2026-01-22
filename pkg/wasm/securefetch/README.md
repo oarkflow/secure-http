@@ -24,7 +24,7 @@ Load Go's runtime JavaScript shim before instantiating the module:
 
 The module registers four globals on `window`:
 
-- `secureFetchInit(config)` – configures the client. Required fields: `baseURL`, `deviceID`, `deviceSecret`. Optional fields: `userToken`, `handshakePath`, `timeoutMs`, `autoHandshake` (defaults to `true`). `deviceSecret` accepts either a UTF-8 string, a `Uint8Array`, or a `base64:`-prefixed string.
+- `secureFetchInit(config)` – configures the client. Required fields: `baseURL`, `deviceID`, `deviceSecret`, `capabilityToken`, and at least one `gateSecret`. Provide gate material either as `gateSecrets: [{ id: "2026-Q1", secret: "base64:..." }]` or via the shorthand `gateSecretID` + `gateSecret`. Optional fields: `userToken`, `handshakePath`, `timeoutMs`, `autoHandshake` (defaults to `true`), `gateNonceBytes`. Secrets accept UTF-8 strings, `Uint8Array`s, or `base64:`-prefixed strings.
 - `secureFetch(request)` – sends an encrypted POST. Required field: `endpoint` (or `url`). Optional: `body`, `responseType` (`json`, `text`, `bytes`), `forceHandshake` (bool). Returns a `Promise` that resolves with the decrypted payload.
 - `secureFetchHandshake(force)` – forces a handshake (default `false`). Returns a `Promise`.
 - `secureFetchReset()` – clears the current client/session.
@@ -36,6 +36,10 @@ await secureFetchInit({
   baseURL: "https://secure.example.com",
   deviceID: "device-001",
   deviceSecret: "base64:ZGV2LXNlY3JldA==",
+  gateSecrets: [
+    { id: "2026-Q1", secret: "base64:Z2F0ZS1sYXllci0x" },
+  ],
+  capabilityToken: "cap-root",
   userToken: "user-token-123",
 });
 

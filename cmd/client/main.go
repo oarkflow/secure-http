@@ -2,9 +2,12 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"log"
+	"os"
 	"time"
 
+	"github.com/oarkflow/securehttp/pkg/config"
 	"github.com/oarkflow/securehttp/pkg/http/client"
 )
 
@@ -21,12 +24,14 @@ type UserResponse struct {
 }
 
 func main() {
-	cfg := client.Config{
-		BaseURL:      "http://localhost:8443",
-		DeviceID:     "device-001",
-		DeviceSecret: []byte("device-001-secret"),
-		UserToken:    "user-token-123",
+	configPath := flag.String("config", clientDefaultConfigPath(), "Path to client configuration JSON")
+	flag.Parse()
+
+	bootstrap, err := config.LoadClientConfig(*configPath)
+	if err != nil {
+		log.Fatalf("load client config: %v", err)
 	}
+	cfg := *bootstrap
 
 	secureClient, err := client.NewSecureClient(cfg)
 	if err != nil {
@@ -107,6 +112,13 @@ func main() {
 	}
 
 	log.Println("\n🎉 All requests completed successfully!")
+}
+
+func clientDefaultConfigPath() string {
+	if val := os.Getenv("SECURE_HTTP_CLIENT_CONFIG"); val != "" {
+		return val
+	}
+	return "config/client.json"
 }
 
 func prettyPrint(data interface{}) {

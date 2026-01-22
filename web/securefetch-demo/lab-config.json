@@ -1,0 +1,32 @@
+{
+    "handshakePath": "/handshake",
+    "capabilityToken": "cap-root",
+    "gateSecrets": [
+        {
+            "id": "2026-Q1",
+            "secret": "base64:Z2F0ZS1zZWNyZXQtMjAyNi1xMQ=="
+        }
+    ],
+    "accounts": [
+        {
+            "id": "owner",
+            "label": "Owner – Admin",
+            "deviceID": "device-001",
+            "deviceSecret": "base64:ZGV2aWNlLTAwMS1zZWNyZXQ=",
+            "userID": "user-123",
+            "userToken": "user-token-123",
+            "roles": [ "admin", "device-owner" ],
+            "notes": "Full access to all protected APIs"
+        },
+        {
+            "id": "operator",
+            "label": "Operator",
+            "deviceID": "device-002",
+            "deviceSecret": "base64:ZGV2aWNlLTAwMi1zZWNyZXQ=",
+            "userID": "user-456",
+            "userToken": "user-token-456",
+            "roles": [ "operator" ],
+            "notes": "Limited to read-only operations"
+        }
+    ]
+}

@@ -77,17 +77,20 @@ func (cm *CryptoMiddleware) Decrypt() fiber.Handler {
 		sessionID := c.Get(cm.headers.SessionID)
 		if sessionID == "" {
 			cm.logEvent(security.AuditEventDecryptFailure, "", "", nil, "missing session header", fmt.Errorf("missing session"))
-			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
-				"error": "Missing session ID",
-			})
+			return respondNotFound(c)
 		}
 
 		session, exists := cm.sessionManager.GetSession(sessionID)
 		if !exists {
 			cm.logEvent(security.AuditEventDecryptFailure, sessionID, "", nil, "session not found", fmt.Errorf("session invalid"))
-			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
-				"error": "Invalid or expired session",
-			})
+			return respondNotFound(c)
+		}
+
+		fingerprint := clientFingerprint(c)
+		if !security.VerifySessionFingerprint(session.Metadata, fingerprint) {
+			cm.sessionManager.DeleteSession(sessionID)
+			cm.logEvent(security.AuditEventDecryptFailure, sessionID, session.Metadata[security.MetadataDeviceID], nil, "fingerprint mismatch", fmt.Errorf("session fingerprint mismatch"))
+			return respondNotFound(c)
 		}
 
 		var userCtx *security.UserContext
@@ -97,25 +100,19 @@ func (cm *CryptoMiddleware) Decrypt() fiber.Handler {
 				ctx, err := cm.policy.UserAuthenticator.Validate(token)
 				if err != nil {
 					cm.logEvent(security.AuditEventDecryptFailure, sessionID, session.Metadata[security.MetadataDeviceID], nil, "user token invalid", err)
-					return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
-						"error": "Invalid user token",
-					})
+					return respondNotFound(c)
 				}
 				userCtx = ctx
 			} else if cm.policy.RequireUser {
 				userCtx = security.ExtractUserContext(session.Metadata)
 				if userCtx == nil {
 					cm.logEvent(security.AuditEventDecryptFailure, sessionID, session.Metadata[security.MetadataDeviceID], nil, "missing user token", fmt.Errorf("user token missing"))
-					return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
-						"error": "Missing user token",
-					})
+					return respondNotFound(c)
 				}
 			}
 		} else if cm.policy != nil && cm.policy.RequireUser {
 			cm.logEvent(security.AuditEventDecryptFailure, sessionID, session.Metadata[security.MetadataDeviceID], nil, "user verification disabled", fmt.Errorf("user verification disabled"))
-			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
-				"error": "User verification disabled",
-			})
+			return respondNotFound(c)
 		} else {
 			userCtx = security.ExtractUserContext(session.Metadata)
 		}
@@ -123,31 +120,23 @@ func (cm *CryptoMiddleware) Decrypt() fiber.Handler {
 		body := c.Body()
 		if len(body) == 0 {
 			cm.logEvent(security.AuditEventDecryptFailure, sessionID, session.Metadata[security.MetadataDeviceID], userCtx, "empty body", fmt.Errorf("empty body"))
-			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-				"error": "Empty request body",
-			})
+			return respondNotFound(c)
 		}
 		if len(body) > MaxMessageSize {
 			cm.logEvent(security.AuditEventDecryptFailure, sessionID, session.Metadata[security.MetadataDeviceID], userCtx, "payload too large", fmt.Errorf("payload too large"))
-			return c.Status(fiber.StatusRequestEntityTooLarge).JSON(fiber.Map{
-				"error": "Request too large",
-			})
+			return respondNotFound(c)
 		}
 
 		var encMsg crypto.EncryptedMessage
 		if err := json.Unmarshal(body, &encMsg); err != nil {
 			cm.logEvent(security.AuditEventDecryptFailure, sessionID, session.Metadata[security.MetadataDeviceID], userCtx, "invalid envelope", err)
-			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-				"error": "Invalid encrypted message format",
-			})
+			return respondNotFound(c)
 		}
 
 		plaintext, err := session.Decrypt(&encMsg)
 		if err != nil {
 			cm.logEvent(security.AuditEventDecryptFailure, sessionID, session.Metadata[security.MetadataDeviceID], userCtx, "decrypt failure", err)
-			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-				"error": "Decryption failed: " + err.Error(),
-			})
+			return respondNotFound(c)
 		}
 
 		c.Locals("decrypted_body", plaintext)
@@ -187,9 +176,7 @@ func (cm *CryptoMiddleware) Encrypt() fiber.Handler {
 		// Get session from context
 		session, ok := c.Locals("session").(*crypto.Session)
 		if !ok {
-			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-				"error": "Session not found in context",
-			})
+			return respondNotFound(c)
 		}
 
 		// Get the response body that was written
@@ -231,9 +218,7 @@ func (cm *CryptoMiddleware) Handshake() fiber.Handler {
 		var req crypto.HandshakeRequest
 		if err := c.BodyParser(&req); err != nil {
 			cm.logEvent(security.AuditEventHandshakeFailure, "", req.DeviceID, nil, "invalid payload", err)
-			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-				"error": "Invalid request format",
-			})
+			return respondNotFound(c)
 		}
 
 		if cm.policy != nil {
@@ -245,25 +230,19 @@ func (cm *CryptoMiddleware) Handshake() fiber.Handler {
 			delta := time.Since(ts)
 			if delta > skew || delta < -skew {
 				cm.logEvent(security.AuditEventHandshakeFailure, "", req.DeviceID, nil, "timestamp out of range", fmt.Errorf("timestamp skew"))
-				return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
-					"error": "Invalid timestamp",
-				})
+				return respondNotFound(c)
 			}
 		}
 
 		if cm.policy != nil && cm.policy.RequireDevice {
 			if req.DeviceID == "" || len(req.DeviceSignature) == 0 {
 				cm.logEvent(security.AuditEventHandshakeFailure, "", req.DeviceID, nil, "missing device identity", fmt.Errorf("missing device"))
-				return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
-					"error": "Missing device identity",
-				})
+				return respondNotFound(c)
 			}
 			payload := security.DeviceAuthenticationPayload(req.ClientPublicKey, req.Timestamp)
 			if err := cm.policy.DeviceRegistry.Validate(req.DeviceID, req.DeviceSignature, payload); err != nil {
 				cm.logEvent(security.AuditEventHandshakeFailure, "", req.DeviceID, nil, "device validation failed", err)
-				return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
-					"error": "Device validation failed",
-				})
+				return respondNotFound(c)
 			}
 		}
 
@@ -272,25 +251,19 @@ func (cm *CryptoMiddleware) Handshake() fiber.Handler {
 			if req.UserToken == "" {
 				if cm.policy.RequireUser {
 					cm.logEvent(security.AuditEventHandshakeFailure, "", req.DeviceID, nil, "missing user token", fmt.Errorf("missing user token"))
-					return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
-						"error": "Missing user token",
-					})
+					return respondNotFound(c)
 				}
 			} else {
 				ctx, err := cm.policy.UserAuthenticator.Validate(req.UserToken)
 				if err != nil {
 					cm.logEvent(security.AuditEventHandshakeFailure, "", req.DeviceID, nil, "user token invalid", err)
-					return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
-						"error": "Invalid user token",
-					})
+					return respondNotFound(c)
 				}
 				userCtx = ctx
 			}
 		} else if cm.policy != nil && cm.policy.RequireUser {
 			cm.logEvent(security.AuditEventHandshakeFailure, "", req.DeviceID, nil, "user verification disabled", fmt.Errorf("user verification disabled"))
-			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
-				"error": "User verification disabled",
-			})
+			return respondNotFound(c)
 		}
 
 		metadata := make(map[string]string)
@@ -300,6 +273,10 @@ func (cm *CryptoMiddleware) Handshake() fiber.Handler {
 		if userCtx != nil {
 			security.AttachUserContext(metadata, userCtx)
 		}
+		fingerprint := clientFingerprint(c)
+		if fingerprint != "" {
+			security.StoreSessionFingerprint(metadata, fingerprint)
+		}
 		if len(metadata) == 0 {
 			metadata = nil
 		}
@@ -307,9 +284,7 @@ func (cm *CryptoMiddleware) Handshake() fiber.Handler {
 		sessionID, err := cm.sessionManager.CreateSession(req.ClientPublicKey, metadata)
 		if err != nil {
 			cm.logEvent(security.AuditEventHandshakeFailure, "", req.DeviceID, userCtx, "session creation failed", err)
-			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-				"error": "Failed to create session",
-			})
+			return respondNotFound(c)
 		}
 
 		nowTime := time.Now()
@@ -343,4 +318,11 @@ func (cm *CryptoMiddleware) logEvent(eventType security.AuditEventType, sessionI
 		evt.UserID = userCtx.ID
 	}
 	cm.policy.Logger.Record(evt)
+}
+
+func clientFingerprint(c *fiber.Ctx) string {
+	if c == nil {
+		return ""
+	}
+	return security.ComputeSessionFingerprint(c.IP(), string(c.Context().UserAgent()))
 }

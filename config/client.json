@@ -1,0 +1,19 @@
+{
+    "base_url": "http://localhost:8443",
+    "handshake_path": "/handshake",
+    "device": {
+        "id": "device-001",
+        "secret": "base64:ZGV2aWNlLTAwMS1zZWNyZXQ="
+    },
+    "user_token": "user-token-123",
+    "gate": {
+        "capability_token": "cap-root",
+        "nonce_size": 20,
+        "secrets": [
+            {
+                "id": "2026-Q1",
+                "secret": "base64:Z2F0ZS1zZWNyZXQtMjAyNi1xMQ=="
+            }
+        ]
+    }
+}

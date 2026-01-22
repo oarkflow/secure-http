@@ -17,74 +17,36 @@
             Build <code>securefetch.wasm</code>, copy it next to this file together with
             Go's <code>wasm_exec.js</code>, then serve the directory with any static server.
         </p>
+        <p class="notice">
+            When you run <code>cmd/fullstack</code>, this UI automatically loads the curated
+            demo accounts listed in <code>lab-config.json</code>. No one pastes secrets into the
+            browser—just pick an account, log in, and drive the encrypted APIs.
+        </p>
 
         <section>
-            <h2>1. Configure client</h2>
-            <form id="init-form" class="card">
+            <h2>1. Pick a demo account</h2>
+            <div class="card">
                 <label>
-                    Base URL
-                    <input type="url" name="baseURL" required placeholder="https://localhost:8443" />
+                    Account
+                    <select id="account-select"></select>
                 </label>
-                <label>
-                    Device ID
-                    <input type="text" name="deviceID" required placeholder="device-001" />
-                </label>
-                <label>
-                    Device Secret
-                    <input type="text" name="deviceSecret" required placeholder="base64:ZGV2LXNlY3JldA==" />
-                </label>
-                <label>
-                    Secret Format
-                    <select name="secretFormat">
-                        <option value="text">UTF-8 string</option>
-                        <option value="base64" selected>base64: prefix</option>
-                        <option value="bytes">Uint8Array (comma separated bytes)</option>
-                    </select>
-                </label>
-                <label>
-                    User Token (optional)
-                    <input type="text" name="userToken" placeholder="user-token-123" />
-                </label>
-                <label>
-                    Handshake Path
-                    <input type="text" name="handshakePath" placeholder="/handshake" />
-                </label>
-                <label class="inline">
-                    <input type="checkbox" name="autoHandshake" checked /> Auto-handshake on init
-                </label>
-                <button type="submit">Initialize secure client</button>
-            </form>
-            <div class="actions">
-                <button id="handshake-btn" type="button">Force handshake</button>
-                <button id="reset-btn" type="button">Reset client</button>
-                <span id="status-indicator">Not initialized</span>
+                <div id="account-details" class="account-details"></div>
+                <div class="actions">
+                    <button id="reset-btn" type="button">Reset session</button>
+                    <span id="status-indicator">Not connected</span>
+                    </div>
             </div>
         </section>
 
         <section>
-            <h2>2. Send secure request</h2>
-            <form id="request-form" class="card">
-                <label>
-                    Endpoint (or absolute URL)
-                    <input type="text" name="endpoint" required placeholder="/api/echo" />
-                </label>
-                <label>
-                    Request Body (JSON)
-                    <textarea name="body" rows="4" placeholder='{"name":"Browser","message":"Hello"}'></textarea>
-                </label>
-                <label>
-                    Response Type
-                    <select name="responseType">
-                        <option value="json" selected>JSON</option>
-                        <option value="text">Text</option>
-                        <option value="bytes">Uint8Array</option>
-                    </select>
-                </label>
-                <label class="inline">
-                    <input type="checkbox" name="forceHandshake" /> Force handshake before request
-                </label>
-                <button type="submit">Call secureFetch</button>
-            </form>
+            <h2>2. Login, then exercise protected APIs</h2>
+            <div class="card action-grid">
+                <button id="login-btn" type="button">Login</button>
+                <button id="session-btn" type="button">Session state</button>
+                <button id="echo-btn" type="button">Echo payload</button>
+                <button id="pentest-btn" type="button">Pentest probe</button>
+                <button id="logout-btn" type="button">Logout</button>
+            </div>
         </section>
 
         <section>

@@ -2,12 +2,15 @@ package main
 
 import (
 	"encoding/json"
+	"flag"
 	"log"
+	"os"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/gofiber/fiber/v2/middleware/recover"
+	"github.com/oarkflow/securehttp/pkg/config"
 	"github.com/oarkflow/securehttp/pkg/http/middleware"
 	"github.com/oarkflow/securehttp/pkg/security"
 )
@@ -25,41 +28,70 @@ type UserResponse struct {
 }
 
 func main() {
-	app := fiber.New(fiber.Config{
-		BodyLimit: 10 * 1024 * 1024,
-	})
+	configPath := flag.String("config", defaultConfigPath(), "Path to server configuration JSON")
+	flag.Parse()
 
-	app.Use(recover.New())
-	app.Use(logger.New())
+	cfg, err := config.LoadServerConfig(*configPath)
+	if err != nil {
+		log.Fatalf("load server config: %v", err)
+	}
 
-	deviceRegistry := security.NewInMemoryDeviceRegistry()
-	deviceRegistry.Register("device-001", []byte("device-001-secret"))
-	deviceRegistry.Register("device-002", []byte("device-002-secret"))
+	auditLogger, cleanup, err := cfg.BuildAuditLogger()
+	if err != nil {
+		log.Fatalf("initialize audit logger: %v", err)
+	}
+	defer cleanup()
 
-	userAuth := security.NewStaticUserAuthenticator()
-	userAuth.Register("user-token-123", &security.UserContext{
-		ID:    "user-123",
-		Roles: []string{"admin", "device-owner"},
-		Metadata: map[string]string{
-			"email": "owner@example.com",
-		},
-	})
-	userAuth.Register("user-token-456", &security.UserContext{
-		ID:    "user-456",
-		Roles: []string{"operator"},
-	})
+	capStore, err := cfg.BuildCapabilityStore()
+	if err != nil {
+		log.Fatalf("build capability store: %v", err)
+	}
+
+	gateCfg, err := cfg.GatekeeperConfig(capStore, auditLogger)
+	if err != nil {
+		log.Fatalf("compose gatekeeper config: %v", err)
+	}
+	gatekeeper, err := security.NewGatekeeper(gateCfg)
+	if err != nil {
+		log.Fatalf("initialize gatekeeper: %v", err)
+	}
+
+	deviceRegistry, err := cfg.BuildDeviceRegistry()
+	if err != nil {
+		log.Fatalf("build device registry: %v", err)
+	}
+
+	userAuth, err := cfg.BuildUserAuthenticator()
+	if err != nil {
+		log.Fatalf("build user authenticator: %v", err)
+	}
 
 	policy := &security.SecurityPolicy{
-		RequireDevice:     true,
-		RequireUser:       true,
+		RequireDevice:     cfg.Auth.RequireDevice,
+		RequireUser:       cfg.Auth.RequireUser,
 		DeviceRegistry:    deviceRegistry,
 		UserAuthenticator: userAuth,
+		Logger:            auditLogger,
 	}
 
 	cryptoMiddleware, err := middleware.NewCryptoMiddleware(policy)
 	if err != nil {
-		log.Fatal("Failed to initialize crypto middleware:", err)
+		log.Fatalf("initialize crypto middleware: %v", err)
 	}
+
+	app := fiber.New(fiber.Config{
+		BodyLimit: 10 * 1024 * 1024,
+		ErrorHandler: func(c *fiber.Ctx, err error) error {
+			c.Response().Reset()
+			return c.SendStatus(fiber.StatusNotFound)
+		},
+	})
+
+	gateMiddleware := middleware.NewGateMiddleware(gatekeeper)
+	app.Use(gateMiddleware.Handle())
+
+	app.Use(recover.New())
+	app.Use(logger.New())
 
 	app.Post("/handshake", cryptoMiddleware.Handshake())
 
@@ -154,10 +186,10 @@ func main() {
 		return c.JSON(response)
 	})
 
-	log.Println("🚀 Secure server starting on :8443")
+	log.Printf("🚀 Secure server starting on %s (config: %s)", cfg.ListenAddr, *configPath)
 	log.Println("📡 Handshake endpoint: POST /handshake")
 	log.Println("🔒 Encrypted endpoints: POST /api/*")
-	log.Fatal(app.Listen(":8443"))
+	log.Fatal(app.Listen(cfg.ListenAddr))
 }
 
 func securityEnvelope(c *fiber.Ctx) fiber.Map {
@@ -172,4 +204,11 @@ func securityEnvelope(c *fiber.Ctx) fiber.Map {
 		}
 	}
 	return payload
+}
+
+func defaultConfigPath() string {
+	if val := os.Getenv("SECURE_HTTP_CONFIG"); val != "" {
+		return val
+	}
+	return "config/server.json"
 }

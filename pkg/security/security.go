@@ -2,7 +2,9 @@ package security
 
 import (
 	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -13,10 +15,11 @@ import (
 )
 
 const (
-	MetadataDeviceID   = "device_id"
-	metadataUserID     = "user_id"
-	metadataUserRoles  = "user_roles"
-	metadataUserPrefix = "user_meta_"
+	MetadataDeviceID           = "device_id"
+	metadataUserID             = "user_id"
+	metadataUserRoles          = "user_roles"
+	metadataUserPrefix         = "user_meta_"
+	metadataSessionFingerprint = "session_fp"
 )
 
 // HeaderNames defines transport headers used for session coordination.
@@ -60,17 +63,93 @@ const (
 	AuditEventHandshakeFailure AuditEventType = "handshake_failure"
 	AuditEventDecryptSuccess   AuditEventType = "decrypt_success"
 	AuditEventDecryptFailure   AuditEventType = "decrypt_failure"
+	AuditEventGateAllowed      AuditEventType = "gate_allowed"
+	AuditEventGateDenied       AuditEventType = "gate_denied"
+	AuditEventPentestProbe     AuditEventType = "pentest_probe"
+	AuditEventLogout           AuditEventType = "logout"
 )
 
 // AuditEvent captures notable security events for logging/metrics.
 type AuditEvent struct {
-	Type      AuditEventType
-	SessionID string
-	DeviceID  string
-	UserID    string
-	Detail    string
-	Err       error
-	Timestamp time.Time
+	Type       AuditEventType
+	SessionID  string
+	DeviceID   string
+	UserID     string
+	Capability string
+	RemoteAddr string
+	Nonce      string
+	Detail     string
+	Err        error
+	Timestamp  time.Time
+}
+
+// Capability describes an allowed method/path tuple granted by a token.
+type Capability struct {
+	Token    string
+	Methods  map[string]struct{}
+	Paths    []string
+	Rules    []CapabilityRule
+	Metadata map[string]string
+}
+
+// CapabilityRule restricts a token to a specific path+method surface.
+type CapabilityRule struct {
+	Path    string
+	Methods map[string]struct{}
+}
+
+// Allows returns true when the capability covers the method/path.
+func (c *Capability) Allows(method, path string) bool {
+	if c == nil {
+		return false
+	}
+	if len(c.Rules) > 0 {
+		for _, rule := range c.Rules {
+			if rule.allows(method, path) {
+				return true
+			}
+		}
+		return false
+	}
+	if len(c.Methods) > 0 {
+		if _, ok := c.Methods[strings.ToUpper(method)]; !ok {
+			return false
+		}
+	}
+	if len(c.Paths) == 0 {
+		return true
+	}
+	for _, allowed := range c.Paths {
+		if pathMatches(allowed, path) {
+			return true
+		}
+	}
+	return false
+}
+
+func (r CapabilityRule) allows(method, path string) bool {
+	if r.Path == "" {
+		return false
+	}
+	if !pathMatches(r.Path, path) {
+		return false
+	}
+	if len(r.Methods) == 0 {
+		return true
+	}
+	_, ok := r.Methods[strings.ToUpper(method)]
+	return ok
+}
+
+func pathMatches(pattern, path string) bool {
+	if pattern == "" {
+		return false
+	}
+	if strings.HasSuffix(pattern, "*") {
+		prefix := strings.TrimSuffix(pattern, "*")
+		return strings.HasPrefix(path, prefix)
+	}
+	return pattern == path
 }
 
 // AuditLogger receives security events.
@@ -94,6 +173,19 @@ type NoopAuditLogger struct{}
 
 // Record implements AuditLogger.
 func (NoopAuditLogger) Record(AuditEvent) {}
+
+// MultiAuditLogger fans out audit events to multiple loggers.
+type MultiAuditLogger []AuditLogger
+
+// Record implements AuditLogger.
+func (ml MultiAuditLogger) Record(evt AuditEvent) {
+	for _, logger := range ml {
+		if logger == nil {
+			continue
+		}
+		logger.Record(evt)
+	}
+}
 
 // DeviceRegistry validates device signatures during the handshake.
 type DeviceRegistry interface {
@@ -320,4 +412,34 @@ func ExtractUserContext(metadata map[string]string) *UserContext {
 		}
 	}
 	return ctx
+}
+
+// StoreSessionFingerprint binds a session to a hashed client fingerprint.
+func StoreSessionFingerprint(metadata map[string]string, fingerprint string) {
+	if metadata == nil || fingerprint == "" {
+		return
+	}
+	metadata[metadataSessionFingerprint] = fingerprint
+}
+
+// VerifySessionFingerprint ensures the inbound request matches the stored fingerprint.
+func VerifySessionFingerprint(metadata map[string]string, fingerprint string) bool {
+	if fingerprint == "" || len(metadata) == 0 {
+		return false
+	}
+	stored := metadata[metadataSessionFingerprint]
+	if stored == "" {
+		return false
+	}
+	return hmac.Equal([]byte(stored), []byte(fingerprint))
+}
+
+// ComputeSessionFingerprint hashes identifying request traits to guard against hijacking.
+func ComputeSessionFingerprint(ip, userAgent string) string {
+	if strings.TrimSpace(ip) == "" && strings.TrimSpace(userAgent) == "" {
+		return ""
+	}
+	composite := strings.TrimSpace(ip) + "|" + strings.TrimSpace(userAgent)
+	sum := sha256.Sum256([]byte(composite))
+	return hex.EncodeToString(sum[:])
 }

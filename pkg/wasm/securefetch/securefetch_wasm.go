@@ -213,6 +213,30 @@ func parseConfig(val js.Value) (wasmConfig, error) {
 	}
 	cfg.cfg.DeviceSecret = secret
 
+	gateSecrets, err := collectGateSecrets(val)
+	if err != nil {
+		return cfg, err
+	}
+	if len(gateSecrets) == 0 {
+		return cfg, errors.New("gateSecret is required")
+	}
+	cfg.cfg.Gate.Secrets = gateSecrets
+
+	capability := str("capabilityToken")
+	if capability == "" {
+		capability = str("gateCapability")
+	}
+	if capability == "" {
+		return cfg, errors.New("capabilityToken is required")
+	}
+	cfg.cfg.Gate.CapabilityToken = capability
+
+	if nonceVal := val.Get("gateNonceBytes"); nonceVal.Type() == js.TypeNumber {
+		cfg.cfg.Gate.NonceSize = nonceVal.Int()
+	} else if nonceVal := val.Get("gateNonceSize"); nonceVal.Type() == js.TypeNumber {
+		cfg.cfg.Gate.NonceSize = nonceVal.Int()
+	}
+
 	if token := str("userToken"); token != "" {
 		cfg.cfg.UserToken = token
 	}
@@ -322,6 +346,83 @@ func valueToBytes(val js.Value) ([]byte, error) {
 	}
 
 	return nil, fmt.Errorf("unsupported secret type: %s", val.Type().String())
+}
+
+func collectGateSecrets(val js.Value) ([]clientpkg.GateSecret, error) {
+	var secrets []clientpkg.GateSecret
+	if arr := val.Get("gateSecrets"); arr.Truthy() {
+		length := arr.Length()
+		for i := 0; i < length; i++ {
+			secret, err := parseGateSecretEntry(arr.Index(i))
+			if err != nil {
+				return nil, err
+			}
+			if secret.ID != "" {
+				secrets = append(secrets, secret)
+			}
+		}
+	}
+	if len(secrets) == 0 {
+		single, err := parseSingleGateSecret(val)
+		if err != nil {
+			return nil, err
+		}
+		if single.ID != "" {
+			secrets = append(secrets, single)
+		}
+	}
+	return secrets, nil
+}
+
+func parseGateSecretEntry(entry js.Value) (clientpkg.GateSecret, error) {
+	id := firstStringProp(entry, "id", "key", "name")
+	secretVal := entry.Get("secret")
+	if !secretVal.Truthy() {
+		secretVal = entry.Get("value")
+	}
+	if id == "" || !secretVal.Truthy() {
+		return clientpkg.GateSecret{}, errors.New("each gateSecret requires id and secret")
+	}
+	return buildGateSecret(id, secretVal)
+}
+
+func parseSingleGateSecret(val js.Value) (clientpkg.GateSecret, error) {
+	id := firstStringProp(val, "gateSecretID", "gateSecretId", "gateKeyID", "gateKeyId")
+	secretVal := val.Get("gateSecret")
+	if id == "" && (!secretVal.Truthy()) {
+		return clientpkg.GateSecret{}, nil
+	}
+	if id == "" {
+		return clientpkg.GateSecret{}, errors.New("gateSecretID is required")
+	}
+	if !secretVal.Truthy() {
+		return clientpkg.GateSecret{}, errors.New("gateSecret value is required")
+	}
+	return buildGateSecret(id, secretVal)
+}
+
+func firstStringProp(val js.Value, keys ...string) string {
+	for _, key := range keys {
+		prop := val.Get(key)
+		if prop.Type() == js.TypeString {
+			trimmed := strings.TrimSpace(prop.String())
+			if trimmed != "" {
+				return trimmed
+			}
+		}
+	}
+	return ""
+}
+
+func buildGateSecret(id string, secretVal js.Value) (clientpkg.GateSecret, error) {
+	secretBytes, err := valueToBytes(secretVal)
+	if err != nil {
+		return clientpkg.GateSecret{}, err
+	}
+	if len(secretBytes) == 0 {
+		return clientpkg.GateSecret{}, errors.New("gateSecret cannot be empty")
+	}
+	return clientpkg.GateSecret{ID: id, Secret: secretBytes}, nil
 }
 
 func normalizeEndpoint(endpoint string) string {
