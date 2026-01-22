@@ -17,7 +17,7 @@ run: wasm run-server
 # Build the fetch WASM module and copy runtime shim
 wasm:
 	@echo "Building fetch.wasm..."
-	GOOS=js GOARCH=wasm go build -o web/demo/fetch.wasm ./cmd/wasm
+	GOOS=js GOARCH=wasm go build -trimpath -ldflags="-s -w" -o web/demo/fetch.wasm ./cmd/wasm
 
 	@echo "Searching for wasm_exec.js..."
 	@if [ -z "$(WASM_EXEC)" ]; then \
