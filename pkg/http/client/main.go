@@ -49,6 +49,7 @@ type SecureClient struct {
 	deviceID      string
 	deviceSecret  []byte
 	userToken     string
+	accessToken   string // JWT access token
 	gateHeaders   security.GateHeaders
 	gateSecrets   []GateSecret
 	capability    string
@@ -80,6 +81,13 @@ type Config struct {
 func (c *SecureClient) SetUserToken(token string) {
 	c.mu.Lock()
 	c.userToken = token
+	c.mu.Unlock()
+}
+
+// SetAccessToken updates the JWT access token for subsequent requests.
+func (c *SecureClient) SetAccessToken(token string) {
+	c.mu.Lock()
+	c.accessToken = token
 	c.mu.Unlock()
 }
 
@@ -408,6 +416,15 @@ func (c *SecureClient) Post(endpoint string, data interface{}) ([]byte, error) {
 	if userToken != "" {
 		req.Header.Set(headerUserToken, userToken)
 	}
+
+	// Add JWT Bearer token if available
+	c.mu.RLock()
+	accessToken := c.accessToken
+	c.mu.RUnlock()
+	if accessToken != "" {
+		req.Header.Set("Authorization", "Bearer "+accessToken)
+	}
+
 	if err := c.applyGateHeaders(req, http.MethodPost, endpoint); err != nil {
 		return nil, err
 	}

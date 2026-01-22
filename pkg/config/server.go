@@ -23,17 +23,20 @@ type ServerConfig struct {
 
 // AuthConfig toggles user/device requirements.
 type AuthConfig struct {
-	RequireDevice bool `json:"require_device"`
-	RequireUser   bool `json:"require_user"`
+	RequireDevice  bool   `json:"require_device"`
+	RequireUser    bool   `json:"require_user"`
+	JWTSigningKey  string `json:"jwt_signing_key"`
 }
 
 // GateConfig declares the pre-routing gate settings.
 type GateConfig struct {
-	Headers      security.GateHeaders `json:"headers"`
-	Secrets      []SecretDefinition   `json:"secrets"`
-	MaxClockSkew string               `json:"max_clock_skew"`
-	NonceTTL     string               `json:"nonce_ttl"`
-	RateLimit    RateLimitConfig      `json:"rate_limit"`
+	Headers        security.GateHeaders `json:"headers"`
+	Secrets        []SecretDefinition   `json:"secrets"`
+	MaxClockSkew   string               `json:"max_clock_skew"`
+	NonceTTL       string               `json:"nonce_ttl"`
+	AllowedOrigins []string             `json:"allowed_origins"`
+	StrictOrigin   bool                 `json:"strict_origin"`
+	RateLimit      RateLimitConfig      `json:"rate_limit"`
 }
 
 // RateLimitConfig maps onto the sliding window limiter.

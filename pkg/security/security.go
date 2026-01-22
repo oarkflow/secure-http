@@ -190,6 +190,9 @@ func (ml MultiAuditLogger) Record(evt AuditEvent) {
 // DeviceRegistry validates device signatures during the handshake.
 type DeviceRegistry interface {
 	Validate(deviceID string, signature []byte, payload []byte) error
+	IsRegistered(deviceID string) bool // Added for origin validation
+	Register(deviceID string, secret []byte) error // Added for dynamic registration
+	GetSecret(deviceID string) ([]byte, error) // Added for secret retrieval
 }
 
 // UserAuthenticator validates user tokens and produces contextual claims.
@@ -280,15 +283,37 @@ func NewInMemoryDeviceRegistry() *InMemoryDeviceRegistry {
 }
 
 // Register stores a device secret used to validate handshake signatures.
-func (r *InMemoryDeviceRegistry) Register(deviceID string, secret []byte) {
+func (r *InMemoryDeviceRegistry) Register(deviceID string, secret []byte) error {
 	if deviceID == "" || len(secret) == 0 {
-		return
+		return errors.New("invalid device ID or secret")
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	secretCopy := make([]byte, len(secret))
 	copy(secretCopy, secret)
 	r.secrets[deviceID] = secretCopy
+	return nil
+}
+
+// IsRegistered checks if a device exists in the registry
+func (r *InMemoryDeviceRegistry) IsRegistered(deviceID string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	_, ok := r.secrets[deviceID]
+	return ok
+}
+
+// GetSecret retrieves the secret for a registered device
+func (r *InMemoryDeviceRegistry) GetSecret(deviceID string) ([]byte, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	secret, ok := r.secrets[deviceID]
+	if !ok {
+		return nil, ErrUnknownDevice
+	}
+	secretCopy := make([]byte, len(secret))
+	copy(secretCopy, secret)
+	return secretCopy, nil
 }
 
 // Validate ensures the provided signature matches the registry secret for the device.

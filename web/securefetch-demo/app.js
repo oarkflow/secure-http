@@ -103,31 +103,38 @@ async function handleLogin(event) {
         log("Received session configuration from server", {
             deviceID: config.deviceID,
             hasDeviceSecret: !!config.deviceSecret,
-            hasGateSecrets: !!config.gateSecrets
+            hasGateSecrets: !!config.gateSecrets,
+            hasAccessToken: !!config.accessToken,
+            hasRefreshToken: !!config.refreshToken
         });
+
+        // Store JWT tokens in sessionStorage (cleared on tab close)
+        if (config.accessToken) {
+            sessionStorage.setItem('accessToken', config.accessToken);
+        }
+        if (config.refreshToken) {
+            sessionStorage.setItem('refreshToken', config.refreshToken);
+        }
 
         // 2. Initialize SecureClient with WASM
         await client.init();
 
-        // 3. Configure and perform handshake
+        // 3. Configure and perform handshake (autoHandshake does this automatically)
         const secureConfig = {
             baseURL: config.baseURL || window.location.origin,
             deviceID: config.deviceID,
             deviceSecret: config.deviceSecret,
             userToken: config.userToken,
+            accessToken: config.accessToken, // JWT token
             handshakePath: config.handshakePath || "/handshake",
             capabilityToken: config.capabilityToken,
             gateSecrets: config.gateSecrets,
             autoHandshake: true,
         };
 
-        log("Initializing secure channel...");
+        log("Initializing secure channel with auto-handshake...");
         await window.secureFetchInit(secureConfig);
-        log("Secure channel initialized, performing handshake...");
-
-        // Ensure handshake completes
-        await window.secureFetchHandshake(true);
-        log("Handshake completed successfully");
+        log("Secure channel initialized and handshake completed");
 
         // Update client ready state
         client.isReady = true;
@@ -179,74 +186,87 @@ function randomNonce() {
 }
 
 function saveLoginState(userID, sessionConfig) {
-    // Save session config to sessionStorage (cleared when tab closes)
+    // Store session config for page refresh restoration
+    // JWT tokens are stored separately in sessionStorage
     const state = {
         userID: userID,
-        sessionConfig: sessionConfig,
         timestamp: Date.now(),
+        config: sessionConfig, // Store full config for restoration
     };
     try {
-        sessionStorage.setItem("securefetch_session", JSON.stringify(state));
+        sessionStorage.setItem("securefetch_user", JSON.stringify(state));
     } catch (err) {
-        log("Could not save session state");
+        log("Could not save user state");
     }
 }
 
 function clearLoginState() {
     try {
-        sessionStorage.removeItem("securefetch_session");
+        sessionStorage.removeItem("securefetch_user");
+        sessionStorage.removeItem("accessToken");
+        sessionStorage.removeItem("refreshToken");
     } catch (err) {}
 }
 
 async function restoreLoginState() {
+    // Restore session from sessionStorage on page refresh
+    // Re-establishes encrypted channel with stored JWT token
     try {
-        const stateJSON = sessionStorage.getItem("securefetch_session");
-        if (!stateJSON) return null;
+        const stateJSON = sessionStorage.getItem("securefetch_user");
+        const accessToken = sessionStorage.getItem("accessToken");
 
-        const state = JSON.parse(stateJSON);
-
-        // Session expired after 1 hour
-        if (Date.now() - state.timestamp > 60 * 60 * 1000) {
-            clearLoginState();
-            log("Session expired - please login again");
+        if (!stateJSON || !accessToken) {
+            log("No active session - please login");
             return null;
         }
 
-        if (!state.sessionConfig) {
+        const state = JSON.parse(stateJSON);
+
+        // Check if token is likely expired (tokens expire after 15 min by default)
+        if (Date.now() - state.timestamp > 15 * 60 * 1000) {
+            clearLoginState();
+            log("Session expired - please login again");
+            setStatus("Session expired", "idle");
+            return null;
+        }
+
+        if (!state.config) {
+            log("Incomplete session data - please login again");
             clearLoginState();
             return null;
         }
 
         log(`Restoring session for ${state.userID}...`);
+        setStatus("Restoring session...", "idle");
 
-        // Reinitialize with saved config
-        await window.secureFetchInit(state.sessionConfig);
-        await window.secureFetchHandshake(true);
+        // Re-initialize WASM client
+        await client.init();
 
+        // Restore session config with stored access token
+        const restoreConfig = {
+            ...state.config,
+            accessToken: accessToken, // Use stored JWT token
+            autoHandshake: true,
+        };
+
+        log("Re-establishing secure channel...");
+        await window.secureFetchInit(restoreConfig);
+        log("Secure channel restored");
+
+        // Update state
         client.isReady = true;
+        currentUserID = state.userID;
+        loggedIn = true;
+        updateControls();
+        setStatus(`✓ Session restored for ${state.userID}`, "ok");
+        log(`Session restored for user: ${state.userID}`);
 
-        // Verify session is still valid on server
-        try {
-            await client.fetch("/api/session/state", {}, "json");
-            currentUserID = state.userID;
-            loggedIn = true;
-            setStatus(`✓ Session restored - ${state.userID}`, "ok");
-            updateControls();
-            log("Session successfully restored");
-
-            // Update form fields
-            if (userIdInput) userIdInput.value = state.userID;
-            if (userTokenInput) userTokenInput.value = "";
-
-            return true;
-        } catch (err) {
-            log(`Session verification failed: ${err.message}`);
-            clearLoginState();
-            return null;
-        }
+        return true;
     } catch (err) {
-        console.warn("Session restore failed:", err);
+        console.warn("Session restoration failed:", err);
+        log(`Failed to restore session: ${err.message}`);
         clearLoginState();
+        setStatus("Please login", "idle");
         return null;
     }
 }

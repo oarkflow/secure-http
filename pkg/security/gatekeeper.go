@@ -21,6 +21,7 @@ var (
 	ErrGateSignatureInvalid = errors.New("gate signature invalid")
 	ErrGateCapabilityDenied = errors.New("capability denied")
 	ErrGateRateLimited      = errors.New("request rate limited")
+	ErrOriginNotAllowed     = errors.New("origin not allowed")
 )
 
 // GateHeaders encapsulates HTTP header names used by the gate.
@@ -263,6 +264,10 @@ type GatekeeperConfig struct {
 	NonceStore      NonceStore
 	RateLimiter     RateLimiter
 	Logger          AuditLogger
+	// Additional security
+	AllowedOrigins []string // List of allowed origins
+	StrictOrigin   bool     // Reject if origin is missing or not in list
+	StatelessAuth  *StatelessAuthenticator // Optional stateless JWT auth
 }
 
 // GateRequest contains the required fields for validation.
@@ -275,12 +280,13 @@ type GateRequest struct {
 
 // Gatekeeper enforces the pre-routing crypto gate.
 type Gatekeeper struct {
-	secrets map[string]RotatingSecret
-	cfg     GatekeeperConfig
-	nonce   NonceStore
-	limiter RateLimiter
-	logger  AuditLogger
-	mu      sync.RWMutex
+	secrets         map[string]RotatingSecret
+	cfg             GatekeeperConfig
+	nonce           NonceStore
+	limiter         RateLimiter
+	logger          AuditLogger
+	mu              sync.RWMutex
+	allowedOrigins  map[string]bool // Pre-computed origin map
 }
 
 // NewGatekeeper initializes the gatekeeper instance.
@@ -317,12 +323,22 @@ func NewGatekeeper(cfg GatekeeperConfig) (*Gatekeeper, error) {
 	if len(secrets) == 0 {
 		return nil, errors.New("no usable gate secrets configured")
 	}
+
+	// Build allowed origins map
+	allowedOrigins := make(map[string]bool)
+	for _, origin := range cfg.AllowedOrigins {
+		normalized := strings.ToLower(strings.TrimSpace(origin))
+		normalized = strings.TrimSuffix(normalized, "/")
+		allowedOrigins[normalized] = true
+	}
+
 	return &Gatekeeper{
-		secrets: secrets,
-		cfg:     cfg,
-		nonce:   cfg.NonceStore,
-		limiter: cfg.RateLimiter,
-		logger:  cfg.Logger,
+		secrets:        secrets,
+		cfg:            cfg,
+		nonce:          cfg.NonceStore,
+		limiter:        cfg.RateLimiter,
+		logger:         cfg.Logger,
+		allowedOrigins: allowedOrigins,
 	}, nil
 }
 
@@ -331,6 +347,19 @@ func (g *Gatekeeper) Evaluate(req GateRequest) (*Capability, error) {
 	if g == nil {
 		return nil, errors.New("gatekeeper unset")
 	}
+
+	// 1. Check origin if configured
+	if len(g.cfg.AllowedOrigins) > 0 || g.cfg.StrictOrigin {
+		origin := req.Headers["Origin"]
+		if origin == "" {
+			origin = req.Headers["Referer"]
+		}
+		if !g.isOriginAllowed(origin) {
+			g.audit(AuditEventGateDenied, "", req.RemoteAddr, "", "origin not allowed", ErrOriginNotAllowed)
+			return nil, ErrOriginNotAllowed
+		}
+	}
+
 	headers := req.Headers
 	header := func(key string) string {
 		if headers == nil {
@@ -467,4 +496,25 @@ func parseUnix(raw string) (int64, error) {
 		ts = ts*10 + int64(ch-'0')
 	}
 	return ts, nil
+}
+
+// isOriginAllowed checks if the request origin is in the allowed list
+func (g *Gatekeeper) isOriginAllowed(origin string) bool {
+	if origin == "" {
+		return !g.cfg.StrictOrigin
+	}
+
+	// Normalize origin
+	origin = strings.ToLower(strings.TrimSpace(origin))
+	origin = strings.TrimSuffix(origin, "/")
+
+	// Extract just the origin part if it's a full URL
+	if strings.Contains(origin, "://") {
+		parts := strings.SplitN(origin, "/", 4)
+		if len(parts) >= 3 {
+			origin = strings.Join(parts[:3], "/")
+		}
+	}
+
+	return g.allowedOrigins[origin]
 }

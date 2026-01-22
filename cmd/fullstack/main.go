@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/cors"
 	"github.com/gofiber/fiber/v2/middleware/logger"
 	"github.com/gofiber/fiber/v2/middleware/recover"
 	"github.com/oarkflow/securehttp/pkg/config"
@@ -51,6 +52,25 @@ func main() {
 
 	if err := ensureStaticBundle(*webRoot); err != nil {
 		log.Fatalf("static assets: %v", err)
+	}
+
+	// Initialize stateless authenticator
+	authKey := []byte(cfg.Auth.JWTSigningKey) // Use key from config
+	if len(authKey) == 0 {
+		// Fallback to a default key for development (should be in config for production)
+		authKey = []byte("your-secure-256-bit-secret-key-minimum-32-chars")
+		log.Println("⚠️  Using default JWT signing key - set jwt_signing_key in config for production")
+	}
+	statelessAuth, err := security.NewStatelessAuthenticator(security.StatelessAuthConfig{
+		SigningKey:       authKey,
+		AccessTokenTTL:   15 * time.Minute,
+		RefreshTokenTTL:  7 * 24 * time.Hour,
+		Algorithm:        "HS512",
+		Issuer:           "secure-http-server",
+		Audience:         "secure-http-api",
+	})
+	if err != nil {
+		log.Fatalf("initialize stateless auth: %v", err)
 	}
 
 	auditLogger, cleanup, err := cfg.BuildAuditLogger()
@@ -111,6 +131,13 @@ func main() {
 
 	app.Use(recover.New())
 	app.Use(logger.New())
+	app.Use(cors.New(cors.Config{
+		AllowOrigins:     "http://localhost:3010,http://localhost:8080",
+		AllowMethods:     "GET,POST,PUT,DELETE,OPTIONS",
+		AllowHeaders:     "Origin,Content-Type,Accept,Authorization,X-Gate-Time,X-Gate-Sign,X-Gate-Purpose,X-Gate-Seq",
+		AllowCredentials: true,
+		MaxAge:           86400,
+	}))
 
 	prefix := normalizePrefix(*staticPrefix)
 	// Mount the entire web directory at the root to ensure cross-module imports work
@@ -143,6 +170,9 @@ func main() {
 
 	gateMiddleware := httpmw.NewGateMiddleware(gatekeeper)
 
+	// JWT middleware for protected routes
+	jwtMiddleware := httpmw.NewStatelessAuthMiddleware(statelessAuth)
+
 	// Apply GateMiddleware only to routes that require gate tokens
 	app.Post("/handshake", gateMiddleware.Handle(), cryptoMiddleware.Handshake())
 
@@ -155,10 +185,11 @@ func main() {
 
 	api := app.Group("/api")
 	api.Use(gateMiddleware.Handle()) // Gate applies to all encrypted APIs
+	api.Use(jwtMiddleware.Verify())  // JWT auth for all API routes
 	api.Use(cryptoMiddleware.Decrypt())
 	api.Use(cryptoMiddleware.Encrypt())
 
-	app.Post("/login", handleLogon(cfg, userAuth, deviceRegistry))
+	app.Post("/login", handleLogon(cfg, userAuth, deviceRegistry, statelessAuth))
 
 	registerSecureRoutes(api, auditLogger, cryptoMiddleware.GetSessionManager())
 
@@ -502,7 +533,7 @@ func userID(ctx *security.UserContext) string {
 	return ctx.ID
 }
 
-func handleLogon(cfg *config.ServerConfig, userAuth security.UserAuthenticator, deviceRegistry security.DeviceRegistry) fiber.Handler {
+func handleLogon(cfg *config.ServerConfig, userAuth security.UserAuthenticator, deviceRegistry security.DeviceRegistry, statelessAuth *security.StatelessAuthenticator) fiber.Handler {
 	type loginReq struct {
 		UserID    string `json:"user_id"`
 		UserToken string `json:"user_token"`
@@ -532,8 +563,8 @@ func handleLogon(cfg *config.ServerConfig, userAuth security.UserAuthenticator, 
 		deviceID := fmt.Sprintf("%s-device", userCtx.ID)
 
 		// Map it into the registry so the Handshake middleware can find it later
-		if reg, ok := deviceRegistry.(*security.InMemoryDeviceRegistry); ok {
-			reg.Register(deviceID, derivedSecret)
+		if err := deviceRegistry.Register(deviceID, derivedSecret); err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to register device"})
 		}
 
 		gateSecrets := make([]fiber.Map, 0)
@@ -549,6 +580,17 @@ func handleLogon(cfg *config.ServerConfig, userAuth security.UserAuthenticator, 
 			capabilityToken = cfg.Capabilities[0].Token
 		}
 
+		// Generate JWT access and refresh tokens
+		accessToken, refreshToken, err := statelessAuth.GenerateTokenPair(
+			userCtx.ID,
+			deviceID,
+			userCtx.Roles,
+			"", // fingerprint - could be extracted from request headers
+		)
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to generate tokens"})
+		}
+
 		return c.JSON(fiber.Map{
 			"status":   200,
 			"success":  true,
@@ -561,6 +603,8 @@ func handleLogon(cfg *config.ServerConfig, userAuth security.UserAuthenticator, 
 			"baseURL":         "",
 			"userToken":       req.UserToken,
 			"userID":          userCtx.ID,
+			"accessToken":     accessToken,
+			"refreshToken":    refreshToken,
 		})
 	}
 }

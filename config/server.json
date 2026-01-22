@@ -2,11 +2,17 @@
     "listen_addr": ":8443",
     "auth": {
         "require_device": true,
-        "require_user": true
+        "require_user": true,
+        "jwt_signing_key": "your-secure-256-bit-secret-key-minimum-32-chars-for-production"
     },
     "gate": {
         "max_clock_skew": "30s",
         "nonce_ttl": "2m",
+        "allowed_origins": [
+            "http://localhost:8443",
+            "http://localhost:3010"
+        ],
+        "strict_origin": false,
         "rate_limit": {
             "window": "15s",
             "max_hits": 20
