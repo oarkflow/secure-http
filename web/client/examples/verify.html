@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SecureClient Verify</title>
+</head>
+<body>
+    <h1>SecureClient Verification</h1>
+    <div id="status">Initializing...</div>
+    <div id="output"></div>
+
+    <script type="module">
+        import { SecureClient } from "../src/index.js";
+
+        // Point to the WASM file in the sibling directory
+        const wasmUrl = "/securefetch-demo/securefetch.wasm";
+
+        const client = new SecureClient({
+            wasmUrl: wasmUrl,
+            // We don't provide labConfig here so it won't try to connect to a real backend,
+            // but it should still load the WASM and expose global functions.
+        });
+
+        async function verify() {
+            try {
+                await client.init();
+                document.getElementById("status").textContent = "WASM Loaded";
+                document.getElementById("status").style.color = "green";
+
+                // Check if globals are present
+                if (typeof window.secureFetch === "function") {
+                    document.getElementById("output").textContent = "secureFetch global found.";
+                } else {
+                    document.getElementById("output").textContent = "secureFetch global MISSING.";
+                    document.getElementById("status").textContent = "Failed";
+                    document.getElementById("status").style.color = "red";
+                }
+            } catch (err) {
+                console.error(err);
+                document.getElementById("status").textContent = "Error: " + err.message;
+                document.getElementById("status").style.color = "red";
+            }
+        }
+
+        verify();
+    </script>
+</body>
+</html>

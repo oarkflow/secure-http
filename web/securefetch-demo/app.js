@@ -1,3 +1,6 @@
+
+import { SecureClient } from "../client/src/index.js";
+
 let consoleEl;
 let statusEl;
 let accountSelect;
@@ -9,12 +12,15 @@ let echoBtn;
 let pentestBtn;
 let logoutBtn;
 
-let clientReady = false;
 let loggedIn = false;
 let currentAccount = null;
-const wasmReady = bootWasm();
 const labConfigPromise = loadLabConfig();
 const protectedButtons = [];
+
+// Initialize SecureClient
+const client = new SecureClient({
+    wasmUrl: "securefetch.wasm"
+});
 
 function log(message, payload) {
     const time = new Date().toISOString();
@@ -41,22 +47,6 @@ function setStatus(text, variant = "idle") {
     }
     statusEl.textContent = text;
     statusEl.dataset.variant = variant;
-}
-
-async function bootWasm() {
-    if (typeof Go === "undefined") {
-        const msg = "wasm_exec.js not loaded. Copy $(go env GOROOT)/misc/wasm/wasm_exec.js next to app.js.";
-        log(msg);
-        throw new Error(msg);
-    }
-    const go = new Go();
-    const resp = await fetch("securefetch.wasm");
-    if (!resp.ok) {
-        throw new Error(`Failed to fetch securefetch.wasm: ${resp.status}`);
-    }
-    const result = await WebAssembly.instantiateStreaming(resp, go.importObject);
-    go.run(result.instance);
-    log("securefetch.wasm loaded");
 }
 
 async function loadLabConfig() {
@@ -144,27 +134,18 @@ function updateControls() {
         button.disabled = !loggedIn;
     });
     if (resetBtn) {
-        resetBtn.disabled = !clientReady && !loggedIn;
+        resetBtn.disabled = !client.isReady && !loggedIn;
     }
 }
 
 updateControls();
 
-async function ensureClientReady(allowAutoInit = false) {
-    await wasmReady;
-    if (clientReady) {
-        return;
-    }
-    if (!allowAutoInit) {
-        throw new Error("Login to establish a secure session first");
-    }
-    await connectSelectedAccount();
-}
-
 async function connectSelectedAccount() {
     const lab = await labConfigPromise;
     requireAccount();
-    await wasmReady;
+    // Let's ensure WASM is loaded first.
+    await client.init();
+
     const cfg = {
         baseURL: lab.baseURL,
         deviceID: currentAccount.deviceID,
@@ -175,8 +156,10 @@ async function connectSelectedAccount() {
         gateSecrets: lab.gateSecrets,
         autoHandshake: true,
     };
-    await secureFetchInit(cfg);
-    clientReady = true;
+
+    // Use the global exposed by WASM (loaded by client)
+    await window.secureFetchInit(cfg);
+
     loggedIn = false;
     saveLoginState();
     updateControls();
@@ -192,10 +175,7 @@ async function connectSelectedAccount() {
 }
 
 function disconnectClient(message = "Client reset") {
-    if (typeof secureFetchReset === "function") {
-        secureFetchReset();
-    }
-    clientReady = false;
+    client.reset().catch(err => log("Reset error: " + err));
     loggedIn = false;
     clearLoginState();
     updateControls();
@@ -215,7 +195,7 @@ function saveLoginState() {
     const state = {
         accountId: currentAccount.id,
         loggedIn: loggedIn,
-        clientReady: clientReady,
+        clientReady: client.isReady,
         timestamp: Date.now(),
     };
     try {
@@ -233,7 +213,7 @@ function clearLoginState() {
     }
 }
 
-function restoreLoginState(config) {
+async function restoreLoginState(config) {
     try {
         const stateJSON = localStorage.getItem("securefetch_login_state");
         if (!stateJSON) {
@@ -257,7 +237,6 @@ function restoreLoginState(config) {
 
         currentAccount = account;
         loggedIn = state.loggedIn || false;
-        clientReady = state.clientReady || false;
 
         if (accountSelect) {
             accountSelect.value = account.id;
@@ -278,12 +257,17 @@ function restoreLoginState(config) {
 }
 
 async function callSecureEndpoint(endpoint, body, description, allowAutoInit = false) {
-    await ensureClientReady(allowAutoInit);
-    const response = await secureFetch({
-        endpoint,
-        body,
-        responseType: "json",
-    });
+    // If not allowing auto init, we ensure client is loaded, but if we need a specific account config
+    // we must have called connectSelectedAccount already.
+    if (!allowAutoInit && !client.isReady) {
+         throw new Error("Login to establish a secure session first");
+    }
+
+    if (allowAutoInit && !client.isReady) {
+        await connectSelectedAccount();
+    }
+
+    const response = await client.fetch(endpoint, body, "json");
     log(`${description} → 200`, response);
     return response;
 }
@@ -298,6 +282,10 @@ function accountSummary() {
 
 async function handleLogin() {
     requireAccount();
+    if (!client.isReady) {
+         await connectSelectedAccount();
+    }
+
     const payload = {
         username: currentAccount.userID,
         purpose: "demo-login",
@@ -360,7 +348,7 @@ document.addEventListener("DOMContentLoaded", () => {
         accountSelect.addEventListener("change", async (event) => {
             const lab = await labConfigPromise;
             selectAccountById(lab, event.target.value);
-            if (clientReady || loggedIn) {
+            if (client.isReady || loggedIn) {
                 disconnectClient("Account switched; session cleared");
             }
         });
@@ -376,6 +364,7 @@ document.addEventListener("DOMContentLoaded", () => {
         loginBtn.addEventListener("click", () => {
             handleLogin().catch((err) => {
                 log(`Login error: ${err.message}`);
+                setStatus("Error: " + err.message, "error");
             });
         });
     }
@@ -414,12 +403,12 @@ document.addEventListener("DOMContentLoaded", () => {
 
     (async () => {
         try {
-            await wasmReady;
+            await client.init();
             const lab = await labConfigPromise;
             renderAccounts(lab);
 
             // Try to restore previous session
-            const restoredState = restoreLoginState(lab);
+            const restoredState = await restoreLoginState(lab);
             if (restoredState && restoredState.clientReady) {
                 // Reinitialize the client with restored account
                 try {
@@ -433,16 +422,12 @@ document.addEventListener("DOMContentLoaded", () => {
                         gateSecrets: lab.gateSecrets,
                         autoHandshake: false, // Don't auto handshake, try to restore first
                     };
-                    await secureFetchInit(cfg);
+                    await window.secureFetchInit(cfg);
 
                     // Verify the restored session works by checking session state
                     if (restoredState.loggedIn) {
                         try {
-                            await secureFetch({
-                                endpoint: "/api/session/state",
-                                body: {},
-                                responseType: "json",
-                            });
+                            await client.fetch("/api/session/state", {}, "json");
                             setStatus(`Session restored - ${restoredState.account.label}`, "ok");
                             log("Session successfully restored and verified", {
                                 account: restoredState.account.id,

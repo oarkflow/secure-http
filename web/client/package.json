@@ -1,0 +1,17 @@
+{
+  "name": "@secure-http/client",
+  "version": "0.1.0",
+  "description": "SecureFetch Client for JS/WASM",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "wasm",
+    "securefetch",
+    "security"
+  ],
+  "author": "",
+  "license": "ISC"
+}
