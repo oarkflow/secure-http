@@ -135,19 +135,45 @@ func main() {
 	app.Use(recover.New())
 	app.Use(logger.New())
 	app.Use(cors.New(cors.Config{
-		AllowOrigins:     "http://localhost:3010,http://localhost:8080",
+		AllowOrigins:     "http://localhost:3010,http://localhost:8080,http://localhost:8081,http://127.0.0.1:8081,http://localhost:8443,http://127.0.0.1:8443",
 		AllowMethods:     "GET,POST,PUT,DELETE,OPTIONS",
-		AllowHeaders:     "Origin,Content-Type,Accept,Authorization,X-Gate-Time,X-Gate-Sign,X-Gate-Purpose,X-Gate-Seq",
+		AllowHeaders:     "Origin,Content-Type,Accept,Authorization,X-Gate-Time,X-Gate-Sign,X-Gate-Purpose,X-Gate-Seq,X-Gate-Key,X-Gate-Nonce,X-Gate-Timestamp,X-Gate-Signature,X-Capability-Token,X-Session-ID,X-User-Token,X-Original-Content-Type",
 		AllowCredentials: true,
 		MaxAge:           86400,
 	}))
 
+	gateMiddleware := httpmw.NewGateMiddleware(gatekeeper)
+
+	// JWT middleware for protected routes
+	jwtMiddleware := httpmw.NewStatelessAuthMiddleware(statelessAuth)
+
+	// Register API routes BEFORE static file middleware to prevent conflicts
+	app.Post("/handshake", gateMiddleware.Handle(), cryptoMiddleware.Handshake())
+
+	app.Get("/health", func(c *fiber.Ctx) error {
+		return c.JSON(fiber.Map{
+			"status":   "healthy",
+			"sessions": cryptoMiddleware.GetSessionManager().SessionCount(),
+		})
+	})
+
+	app.Post("/login", handleLogon(cfg, userAuth, deviceRegistry, statelessAuth))
+
+	api := app.Group("/api")
+	api.Use(gateMiddleware.Handle()) // Gate applies to all encrypted APIs
+	api.Use(jwtMiddleware.Verify())  // JWT auth for all API routes
+	api.Use(cryptoMiddleware.Decrypt())
+	api.Use(cryptoMiddleware.Encrypt())
+
+	registerSecureRoutes(api, auditLogger, cryptoMiddleware.GetSessionManager())
+
 	prefix := normalizePrefix(*staticPrefix)
 	// Mount the entire web directory at the root to ensure cross-module imports work
 	// e.g. /demo/app.js can import from /client/src/index.js
+	// Note: Browse is disabled to prevent conflicts with API routes
 	app.Static("/", "web", fiber.Static{
 		Compress:      true,
-		Browse:        true,
+		Browse:        false,
 		Index:         "index.html",
 		CacheDuration: 30 * time.Minute,
 		MaxAge:        600,
@@ -170,31 +196,6 @@ func main() {
 		}
 		return c.Redirect(target, fiber.StatusTemporaryRedirect)
 	})
-
-	gateMiddleware := httpmw.NewGateMiddleware(gatekeeper)
-
-	// JWT middleware for protected routes
-	jwtMiddleware := httpmw.NewStatelessAuthMiddleware(statelessAuth)
-
-	// Apply GateMiddleware only to routes that require gate tokens
-	app.Post("/handshake", gateMiddleware.Handle(), cryptoMiddleware.Handshake())
-
-	app.Get("/health", func(c *fiber.Ctx) error {
-		return c.JSON(fiber.Map{
-			"status":   "healthy",
-			"sessions": cryptoMiddleware.GetSessionManager().SessionCount(),
-		})
-	})
-
-	api := app.Group("/api")
-	api.Use(gateMiddleware.Handle()) // Gate applies to all encrypted APIs
-	api.Use(jwtMiddleware.Verify())  // JWT auth for all API routes
-	api.Use(cryptoMiddleware.Decrypt())
-	api.Use(cryptoMiddleware.Encrypt())
-
-	app.Post("/login", handleLogon(cfg, userAuth, deviceRegistry, statelessAuth))
-
-	registerSecureRoutes(api, auditLogger, cryptoMiddleware.GetSessionManager())
 
 	log.Printf("🧪 Full-stack secure demo available on %s", listenAddr)
 	log.Printf("   • Static lab: http://localhost%s%s/", listenAddr, prefix)
@@ -219,6 +220,12 @@ func registerSecureRoutes(api fiber.Router, auditLogger security.AuditLogger, se
 	api.Post("/upload", handleFileUpload(auditLogger))
 	api.Get("/files", handleListFiles())
 	api.Get("/files/:filename", handleDownloadFile())
+
+	// Protected API endpoint for demo
+	api.Get("/protected", handleProtected())
+
+	// Secure asset loading - protected route for demo assets
+	api.Get("/assets/:filename", handleSecureAsset(auditLogger))
 
 }
 
@@ -248,6 +255,26 @@ func handleEcho() fiber.Handler {
 				"received":     req,
 				"processed_at": time.Now(),
 				"security":     securityEnvelope(c),
+			},
+		})
+	}
+}
+
+func handleProtected() fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		// Get user context from middleware
+		userCtx := c.Locals("user")
+
+		return c.JSON(fiber.Map{
+			"success": true,
+			"message": "This is a protected endpoint",
+			"data": fiber.Map{
+				"timestamp": time.Now().Format(time.RFC3339),
+				"user":      userCtx,
+				"security": fiber.Map{
+					"encrypted": true,
+					"authenticated": true,
+				},
 			},
 		})
 	}
@@ -502,10 +529,56 @@ func handleFileUpload(auditLogger security.AuditLogger) fiber.Handler {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 		}
 
-		// Get original content type from header
-		originalContentType := c.Get("X-Original-Content-Type", "")
+		// Try to get original content type from multiple sources (in order of reliability)
+		// 1. Query parameter (works in WASM)
+		originalContentType := c.Query("_ct", "")
+
+		// 2. Header (works for native Go client)
 		if originalContentType == "" {
-			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Missing original content type"})
+			originalContentType = c.Get("X-Original-Content-Type", "")
+		}
+
+		// 3. Try to detect from body (last resort - won't work for encrypted but trying anyway)
+		if originalContentType == "" {
+			// Look for multipart boundary in first few bytes of body
+			scanLen := 200
+			if len(body) < scanLen {
+				scanLen = len(body)
+			}
+			bodyStr := string(body[:scanLen])
+			if strings.Contains(bodyStr, "multipart/form-data") {
+				// Extract boundary from body content
+				if idx := strings.Index(bodyStr, "boundary="); idx != -1 {
+					boundaryStart := idx + len("boundary=")
+					boundaryEnd := strings.IndexAny(bodyStr[boundaryStart:], "\r\n;")
+					if boundaryEnd == -1 {
+						boundaryEnd = len(bodyStr) - boundaryStart
+					}
+					boundary := strings.Trim(bodyStr[boundaryStart:boundaryStart+boundaryEnd], `"`)
+					originalContentType = fmt.Sprintf("multipart/form-data; boundary=%s", boundary)
+				}
+			}
+
+			// Try to find boundary marker in body
+			if originalContentType == "" {
+				if idx := bytes.Index(body, []byte("--")); idx != -1 {
+					endIdx := bytes.IndexByte(body[idx+2:], '\r')
+					if endIdx == -1 {
+						endIdx = bytes.IndexByte(body[idx+2:], '\n')
+					}
+					if endIdx > 0 {
+						boundary := string(body[idx+2 : idx+2+endIdx])
+						originalContentType = fmt.Sprintf("multipart/form-data; boundary=%s", boundary)
+					}
+				}
+			}
+		}
+
+		if originalContentType == "" {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
+				"error": "Could not determine multipart content type",
+				"hint":  "Content type should be passed via query param _ct or header X-Original-Content-Type",
+			})
 		}
 
 		// Parse multipart form from decrypted body
@@ -523,6 +596,12 @@ func handleFileUpload(auditLogger security.AuditLogger) fiber.Handler {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": fmt.Sprintf("Failed to parse form: %v", err)})
 		}
 		defer form.RemoveAll()
+
+		// Extract file content type from form data if provided
+		fileContentType := "application/octet-stream"
+		if ctValues := form.Value["__file_content_type__"]; len(ctValues) > 0 {
+			fileContentType = ctValues[0]
+		}
 
 		// Create uploads directory if it doesn't exist
 		uploadsDir := "uploads"
@@ -554,13 +633,19 @@ func handleFileUpload(auditLogger security.AuditLogger) fiber.Handler {
 					continue
 				}
 
+				// Use extracted content type if available, otherwise fall back to header
+				detectedType := fileContentType
+				if headerType := fileHeader.Header.Get("Content-Type"); headerType != "" && headerType != "application/octet-stream" {
+					detectedType = headerType
+				}
+
 				fileInfo = append(fileInfo, fiber.Map{
 					"field":         fieldName,
 					"filename":      fileHeader.Filename,
 					"saved_as":      uniqueFilename,
 					"path":          filePath,
 					"size":          len(data),
-					"type":          fileHeader.Header.Get("Content-Type"),
+					"type":          detectedType,
 					"uploaded_at":   time.Now().Format(time.RFC3339),
 				})
 
@@ -683,6 +768,73 @@ func handleDownloadFile() fiber.Handler {
 				"modified_at": info.ModTime().Format(time.RFC3339),
 			},
 		})
+	}
+}
+
+func handleSecureAsset(auditLogger security.AuditLogger) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		filename := c.Params("filename")
+		if filename == "" {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Filename required"})
+		}
+
+		// Sanitize filename to prevent directory traversal
+		filename = filepath.Base(filename)
+
+		// Try to find the asset in web/wasm/assets directory
+		filePath := filepath.Join("web", "wasm", "assets", filename)
+
+		// Check if file exists
+		info, err := os.Stat(filePath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Asset not found"})
+			}
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to access asset"})
+		}
+
+		if info.IsDir() {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid asset"})
+		}
+
+		// Read file
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to read asset"})
+		}
+
+		// Log secure asset access
+		sessionID, _ := c.Locals("session_id").(string)
+		deviceID, _ := c.Locals("device_id").(string)
+		userCtx, _ := c.Locals("user_context").(*security.UserContext)
+
+		if auditLogger != nil {
+			auditLogger.Record(security.AuditEvent{
+				Type:      security.AuditEventDecryptSuccess,
+				SessionID: sessionID,
+				DeviceID:  deviceID,
+				UserID:    userID(userCtx),
+				Detail:    fmt.Sprintf("secure asset access: %s", filename),
+				Timestamp: time.Now(),
+			})
+		}
+
+		// For JSON files, parse and return as JSON
+		// For other files, return base64 encoded
+		var responseData interface{}
+		if strings.HasSuffix(filename, ".json") {
+			var jsonData interface{}
+			if err := json.Unmarshal(data, &jsonData); err == nil {
+				responseData = jsonData
+			} else {
+				responseData = string(data)
+			}
+		} else {
+			responseData = base64.StdEncoding.EncodeToString(data)
+		}
+
+		// Return asset content (will be encrypted in response)
+		return c.JSON(responseData)
 	}
 }
 

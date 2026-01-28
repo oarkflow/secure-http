@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Loading Application...</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+            background: #0f172a;
+            color: #f8fafc;
+            min-height: 100vh;
+        }
+
+        #wasm-loader {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            flex-direction: column;
+            text-align: center;
+        }
+
+        #wasm-loader.hidden {
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+
+        .spinner {
+            width: 50px;
+            height: 50px;
+            border: 4px solid #334155;
+            border-top-color: #3b82f6;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+            margin-bottom: 1.5rem;
+        }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        .status {
+            font-size: 1.125rem;
+            color: #94a3b8;
+            margin-bottom: 0.5rem;
+        }
+
+        .detail {
+            font-size: 0.875rem;
+            color: #64748b;
+        }
+
+        .error {
+            color: #ef4444;
+            padding: 1rem;
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid rgba(239, 68, 68, 0.3);
+            border-radius: 8px;
+            margin-top: 1rem;
+            max-width: 500px;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="wasm-loader">
+        <div class="spinner"></div>
+        <div class="status" id="status">Initializing...</div>
+        <div class="detail" id="detail">Loading WASM module</div>
+        <div id="error" class="error" style="display: none;"></div>
+    </div>
+
+    <script src="wasm_exec.js"></script>
+    <script>
+        'use strict';
+
+        let authConfig = null;
+        let securityToken = null;
+
+        function updateStatus(status, detail) {
+            const s = document.getElementById('status');
+            const d = document.getElementById('detail');
+            if (s) s.textContent = status;
+            if (d) d.textContent = detail;
+        }
+
+        function showError(message) {
+            const loader = document.getElementById('wasm-loader');
+            loader.innerHTML = `
+                <div style="text-align: center; padding: 2rem;">
+                    <div style="font-size: 3rem; margin-bottom: 1rem;">🚫</div>
+                    <h2 style="color: #ef4444; margin-bottom: 1rem;">Error</h2>
+                    <p style="color: #94a3b8; max-width: 400px;">${message}</p>
+                    <button onclick="location.reload()" style="margin-top: 1.5rem; padding: 0.75rem 1.5rem; background: #3b82f6; color: white; border: none; border-radius: 8px; cursor: pointer;">Retry</button>
+                </div>
+            `;
+        }
+
+        // Inject CSS directly into page
+        function injectCSS(path, cssContent) {
+            const style = document.createElement('style');
+            style.setAttribute('data-wasm-path', path);
+            style.textContent = cssContent;
+            document.head.appendChild(style);
+        }
+
+        // Inject JavaScript directly into page
+        function injectScript(path, jsContent) {
+            const script = document.createElement('script');
+            script.setAttribute('data-wasm-path', path);
+            script.textContent = jsContent;
+            document.body.appendChild(script);
+        }
+
+        // Process HTML - extract CSS/JS paths, clean up external refs
+        function processHTML(htmlContent) {
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(htmlContent, 'text/html');
+
+            // Extract stylesheet paths
+            const styleLinks = doc.querySelectorAll('link[rel="stylesheet"]');
+            const stylePaths = [];
+            styleLinks.forEach(link => {
+                const href = link.getAttribute('href');
+                if (href) stylePaths.push(href.replace(/^\.?\//, ''));
+                link.remove();
+            });
+
+            // Extract script paths
+            const scripts = doc.querySelectorAll('script[src]');
+            const scriptPaths = [];
+            scripts.forEach(script => {
+                const src = script.getAttribute('src');
+                if (src && !src.includes('wasm_exec')) {
+                    scriptPaths.push(src.replace(/^\.?\//, ''));
+                }
+                script.remove();
+            });
+
+            // Get inline scripts
+            const inlineScripts = [];
+            doc.querySelectorAll('script:not([src])').forEach(script => {
+                if (script.textContent.trim()) {
+                    inlineScripts.push(script.textContent);
+                }
+                script.remove();
+            });
+
+            return { doc, stylePaths, scriptPaths, inlineScripts };
+        }
+
+        // Load all CSS files from WASM
+        async function loadStyles(stylePaths) {
+            for (const path of stylePaths) {
+                try {
+                    const result = goGetAssetAsText(path, securityToken);
+                    if (!result.error) {
+                        injectCSS(path, result.text);
+                        console.log('✅ Loaded CSS:', path);
+                    }
+                } catch (err) {
+                    console.error('Error loading CSS:', path, err);
+                }
+            }
+        }
+
+        // Load all JS files from WASM
+        async function loadScripts(scriptPaths) {
+            for (const path of scriptPaths) {
+                try {
+                    const result = goGetAssetAsText(path, securityToken);
+                    if (!result.error) {
+                        injectScript(path, result.text);
+                        console.log('✅ Loaded JS:', path);
+                    }
+                } catch (err) {
+                    console.error('Error loading JS:', path, err);
+                }
+            }
+        }
+
+        // Main loading function
+        async function loadFrontend() {
+            try {
+                updateStatus('Loading application...', 'Fetching index.html from WASM');
+
+                // Get index.html from WASM
+                const htmlResult = goGetAssetAsText('index.html', securityToken);
+                if (htmlResult.error) {
+                    throw new Error('Failed to load index.html: ' + htmlResult.error);
+                }
+
+                console.log('📄 Loaded index.html from WASM');
+
+                updateStatus('Processing assets...', 'Parsing HTML');
+                const { doc, stylePaths, scriptPaths, inlineScripts } = processHTML(htmlResult.text);
+
+                // Update page title
+                const title = doc.querySelector('title');
+                if (title) document.title = title.textContent;
+
+                // Copy meta tags
+                doc.querySelectorAll('meta').forEach(meta => {
+                    const name = meta.getAttribute('name') || meta.getAttribute('property');
+                    if (name && !document.querySelector(`meta[name="${name}"], meta[property="${name}"]`)) {
+                        document.head.appendChild(meta.cloneNode(true));
+                    }
+                });
+
+                // Load CSS
+                updateStatus('Loading styles...', `${stylePaths.length} stylesheets`);
+                await loadStyles(stylePaths);
+
+                // Replace body content (keep loader temporarily)
+                updateStatus('Rendering...', 'Building UI');
+                const loader = document.getElementById('wasm-loader');
+
+                // Insert body content
+                const tempDiv = document.createElement('div');
+                tempDiv.innerHTML = doc.body.innerHTML;
+
+                // Move all children to body
+                while (tempDiv.firstChild) {
+                    document.body.insertBefore(tempDiv.firstChild, loader);
+                }
+
+                // Load JS files
+                updateStatus('Loading scripts...', `${scriptPaths.length} scripts`);
+                await loadScripts(scriptPaths);
+
+                // Execute inline scripts
+                inlineScripts.forEach(scriptContent => {
+                    try {
+                        const script = document.createElement('script');
+                        script.textContent = scriptContent;
+                        document.body.appendChild(script);
+                    } catch (err) {
+                        console.error('Inline script error:', err);
+                    }
+                });
+
+                // Hide and remove loader
+                loader.classList.add('hidden');
+                setTimeout(() => loader.remove(), 300);
+
+                console.log('✅ Frontend loaded successfully from WASM!');
+
+            } catch (err) {
+                console.error('Failed to load frontend:', err);
+                showError(err.message);
+            }
+        }
+
+        // Initialize everything
+        async function init() {
+            console.log('🚀 Starting app-loader...');
+
+            // Check authentication
+            const configJson = sessionStorage.getItem('auth_config');
+            if (!configJson) {
+                showError('Not authenticated. Redirecting to login...');
+                setTimeout(() => window.location.href = './login.html', 1500);
+                return;
+            }
+
+            try {
+                authConfig = JSON.parse(configJson);
+
+                // Make auth config globally available for the loaded app
+                window.__AUTH_CONFIG__ = authConfig;
+
+                updateStatus('Loading WASM...', 'Initializing secure environment');
+
+                const go = new Go();
+                const cacheBuster = Date.now();
+                const response = await fetch('main.wasm?v=' + cacheBuster);
+                if (!response.ok) throw new Error(`Failed to fetch WASM: ${response.status}`);
+
+                const buffer = await response.arrayBuffer();
+                updateStatus('Compiling WASM...', 'This may take a moment');
+
+                const result = await WebAssembly.instantiate(buffer, go.importObject);
+
+                updateStatus('Starting runtime...', 'Initializing Go');
+                go.run(result.instance);
+
+                // Wait for WASM functions to be registered
+                let attempts = 0;
+                const checkReady = setInterval(() => {
+                    if (typeof goCheckDomain === 'function' || attempts > 50) {
+                        clearInterval(checkReady);
+
+                        if (typeof goCheckDomain !== 'function') {
+                            showError('WASM module failed to initialize');
+                            return;
+                        }
+
+                        updateStatus('Checking authorization...', 'Validating domain');
+                        const domainCheck = goCheckDomain();
+                        console.log('Domain check:', domainCheck);
+
+                        if (!domainCheck.allowed) {
+                            showError(`Domain not authorized: ${domainCheck.authError || domainCheck.hostname}`);
+                            return;
+                        }
+
+                        securityToken = domainCheck.token;
+                        window.__SECURITY_TOKEN__ = securityToken;
+                        console.log('✅ Domain authorized:', domainCheck.hostname);
+
+                        // Now load the frontend from WASM assets
+                        loadFrontend();
+                    }
+                    attempts++;
+                }, 100);
+
+            } catch (error) {
+                console.error('Init error:', error);
+                showError(error.message);
+            }
+        }
+
+        // Start
+        init();
+    </script>
+</body>
+
+</html>

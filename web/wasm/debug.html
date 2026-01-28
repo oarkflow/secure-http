@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>WASM Debug Test</title>
+    <style>
+        body {
+            font-family: monospace;
+            background: #1e1e1e;
+            color: #0f0;
+            padding: 2rem;
+        }
+
+        pre {
+            background: #000;
+            padding: 1rem;
+            border-radius: 4px;
+            overflow: auto;
+        }
+
+        button {
+            margin: 0.5rem;
+            padding: 0.5rem 1rem;
+        }
+
+        .error {
+            color: #f44;
+        }
+
+        .success {
+            color: #4f4;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>WASM Debug Test</h1>
+    <div id="output">
+        <pre>Loading...</pre>
+    </div>
+
+    <button onclick="testCheckDomain()">Test goCheckDomain</button>
+    <button onclick="testListAssets()">Test goListAssets</button>
+    <button onclick="testGetAsset()">Test goGetAsset</button>
+    <button onclick="testGetAssetAsText()">Test goGetAssetAsText</button>
+
+    <script src="wasm_exec.js"></script>
+    <script>
+        const output = document.getElementById('output');
+        let securityToken = null;
+
+        function log(msg, isError = false) {
+            const pre = document.createElement('pre');
+            pre.className = isError ? 'error' : 'success';
+            pre.textContent = typeof msg === 'object' ? JSON.stringify(msg, null, 2) : msg;
+            output.appendChild(pre);
+            console.log(msg);
+        }
+
+        async function init() {
+            log('🚀 Starting WASM load...');
+
+            try {
+                const go = new Go();
+                log('📦 Fetching main.wasm...');
+
+                const cacheBuster = Date.now();
+                const response = await fetch('main.wasm?v=' + cacheBuster);
+                log(`📥 Response: ${response.status} ${response.statusText}`);
+
+                const buffer = await response.arrayBuffer();
+                log(`📊 WASM size: ${buffer.byteLength} bytes`);
+
+                log('⚙️ Instantiating WebAssembly...');
+                const result = await WebAssembly.instantiate(buffer, go.importObject);
+
+                log('▶️ Running Go runtime...');
+                go.run(result.instance);
+
+                // Wait for functions to register
+                await new Promise(r => setTimeout(r, 500));
+
+                log('🔍 Checking registered functions:');
+                log('  - goCheckDomain: ' + (typeof goCheckDomain));
+                log('  - goGetAsset: ' + (typeof goGetAsset));
+                log('  - goGetAssetAsText: ' + (typeof goGetAssetAsText));
+                log('  - goListAssets: ' + (typeof goListAssets));
+                log('  - goLoadFrontend: ' + (typeof goLoadFrontend));
+                log('  - secureFetchInit: ' + (typeof secureFetchInit));
+                log('  - secureFetch: ' + (typeof secureFetch));
+
+                if (typeof goCheckDomain === 'function') {
+                    log('✅ goCheckDomain exists, calling it...');
+                    const domainCheck = goCheckDomain();
+                    log('Domain check result:');
+                    log(domainCheck);
+
+                    if (domainCheck.allowed) {
+                        securityToken = domainCheck.token;
+                        log('✅ Domain authorized! Token: ' + securityToken.substring(0, 20) + '...');
+                    } else {
+                        log('❌ Domain NOT authorized: ' + domainCheck.authError, true);
+                    }
+                } else {
+                    log('❌ goCheckDomain is NOT a function!', true);
+                }
+
+            } catch (error) {
+                log('❌ Error: ' + error.message, true);
+                log(error.stack, true);
+            }
+        }
+
+        function testCheckDomain() {
+            if (typeof goCheckDomain !== 'function') {
+                log('❌ goCheckDomain not available', true);
+                return;
+            }
+            const result = goCheckDomain();
+            log('goCheckDomain result:');
+            log(result);
+            if (result.token) securityToken = result.token;
+        }
+
+        function testListAssets() {
+            if (typeof goListAssets !== 'function') {
+                log('❌ goListAssets not available', true);
+                return;
+            }
+            if (!securityToken) {
+                log('❌ No security token. Call goCheckDomain first.', true);
+                return;
+            }
+            const result = goListAssets(securityToken);
+            log('goListAssets result:');
+            log(result);
+        }
+
+        function testGetAsset() {
+            if (typeof goGetAsset !== 'function') {
+                log('❌ goGetAsset not available', true);
+                return;
+            }
+            if (!securityToken) {
+                log('❌ No security token. Call goCheckDomain first.', true);
+                return;
+            }
+            const result = goGetAsset('index.html', securityToken);
+            log('goGetAsset("index.html") result:');
+            if (result.data) {
+                log('  data: Uint8Array(' + result.data.length + ' bytes)');
+                log('  mimeType: ' + result.mimeType);
+                log('  path: ' + result.path);
+            } else {
+                log(result);
+            }
+        }
+
+        function testGetAssetAsText() {
+            if (typeof goGetAssetAsText !== 'function') {
+                log('❌ goGetAssetAsText not available', true);
+                return;
+            }
+            if (!securityToken) {
+                log('❌ No security token. Call goCheckDomain first.', true);
+                return;
+            }
+            const result = goGetAssetAsText('index.html', securityToken);
+            log('goGetAssetAsText("index.html") result:');
+            log(result);
+        }
+
+        init();
+    </script>
+</body>
+
+</html>

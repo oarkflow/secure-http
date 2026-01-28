@@ -10,7 +10,8 @@
 		"nonce_ttl": "2m",
 		"allowed_origins": [
 			"http://localhost:8443",
-			"http://localhost:3010"
+            "http://localhost:3010",
+            "http://localhost:8081"
 		],
 		"strict_origin": false,
 		"rate_limit": {
@@ -39,6 +40,7 @@
 				{ "path": "/handshake", "methods": [ "POST" ] },
 				{ "path": "/api/*", "methods": [ "POST" ] },
 				{ "path": "/api/files", "methods": [ "GET" ] },
+                { "path": "/api/protected", "methods": [ "GET" ] },
 				{ "path": "/health", "methods": [ "GET" ] }
 			],
 			"metadata": {

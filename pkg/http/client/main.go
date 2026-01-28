@@ -587,10 +587,18 @@ func (c *SecureClient) UploadFile(endpoint string, fileData []byte, filename, fi
 		return nil, fmt.Errorf("failed to marshal encrypted message: %w", err)
 	}
 
+	// Add content type as query parameter (more reliable than headers in WASM)
+	uploadURL := c.baseURL + endpoint
+	if !strings.Contains(uploadURL, "?") {
+		uploadURL += "?_ct=" + contentType
+	} else {
+		uploadURL += "&_ct=" + contentType
+	}
+
 	// Create HTTP request
 	req, err := http.NewRequest(
 		http.MethodPost,
-		c.baseURL+endpoint,
+		uploadURL,
 		bytes.NewReader(encBody),
 	)
 	if err != nil {
@@ -601,7 +609,7 @@ func (c *SecureClient) UploadFile(endpoint string, fileData []byte, filename, fi
 	// Original content type is preserved in encrypted payload
 	req.Header.Set("Content-Type", "application/octet-stream")
 	req.Header.Set(headerSessionID, session.SessionID)
-	req.Header.Set("X-Original-Content-Type", contentType) // Store original type
+	req.Header.Set("X-Original-Content-Type", contentType) // Store original type (may not work in WASM)
 	if userToken != "" {
 		req.Header.Set(headerUserToken, userToken)
 	}

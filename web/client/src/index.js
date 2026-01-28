@@ -184,13 +184,16 @@ export class SecureClient {
 
         let fileData;
         let finalFilename = filename;
+        let contentType = "application/octet-stream";
 
         if (file instanceof File) {
             finalFilename = finalFilename || file.name;
+            contentType = file.type || "application/octet-stream";
             const arrayBuffer = await file.arrayBuffer();
             fileData = new Uint8Array(arrayBuffer);
         } else if (file instanceof Blob) {
             finalFilename = finalFilename || "blob";
+            contentType = file.type || "application/octet-stream";
             const arrayBuffer = await file.arrayBuffer();
             fileData = new Uint8Array(arrayBuffer);
         } else if (file instanceof Uint8Array) {
@@ -200,12 +203,18 @@ export class SecureClient {
             throw new Error("File must be File, Blob, or Uint8Array");
         }
 
+        // Pass content type through formData as a special field
+        const enrichedFormData = {
+            ...formData,
+            "__file_content_type__": contentType
+        };
+
         return window.secureFetch({
             endpoint,
             file: fileData,
             filename: finalFilename,
             fieldName,
-            formData,
+            formData: enrichedFormData,
             responseType,
             method: "POST"
         });

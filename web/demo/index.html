@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SecureHTTP Demo</title>
+    <style>
+        :root {
+            --bg: #0f172a;
+            --card: #1e293b;
+            --text: #f8fafc;
+            --muted: #94a3b8;
+            --accent: #3b82f6;
+            --success: #22c55e;
+            --border: #475569;
+        }
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 2rem;
+        }
+        .container { max-width: 600px; text-align: center; }
+        h1 {
+            font-size: 2rem;
+            margin-bottom: 1rem;
+            background: linear-gradient(135deg, var(--accent), #8b5cf6);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        p { color: var(--muted); margin-bottom: 1.5rem; line-height: 1.6; }
+        .links { display: flex; gap: 1rem; justify-content: center; flex-wrap: wrap; }
+        a {
+            display: inline-block;
+            padding: 0.75rem 1.5rem;
+            background: var(--accent);
+            color: white;
+            text-decoration: none;
+            border-radius: 8px;
+            font-weight: 500;
+            transition: opacity 0.2s;
+        }
+        a:hover { opacity: 0.9; }
+        a.secondary { background: var(--card); border: 1px solid var(--border); }
+        .status { margin-top: 2rem; padding: 1rem; background: var(--card); border-radius: 8px; }
+        .status-item { display: flex; justify-content: space-between; padding: 0.5rem 0; font-size: 0.9rem; }
+        .status-label { color: var(--muted); }
+        .status-value { color: var(--success); }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🔐 SecureHTTP Server</h1>
+        <p>End-to-end encrypted HTTP communication with device authentication, capability-based access control, and real-time audit logging.</p>
+
+        <div class="links">
+            <a href="/wasm/">WASM Demo</a>
+            <a href="/client/examples/verify.html" class="secondary">Client Verify</a>
+        </div>
+
+        <div class="status">
+            <div class="status-item">
+                <span class="status-label">Server Status</span>
+                <span class="status-value" id="server-status">Checking...</span>
+            </div>
+            <div class="status-item">
+                <span class="status-label">Active Sessions</span>
+                <span class="status-value" id="session-count">-</span>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        fetch('/health')
+            .then(r => r.json())
+            .then(data => {
+                document.getElementById('server-status').textContent = data.status || 'Online';
+                document.getElementById('session-count').textContent = data.sessions || 0;
+            })
+            .catch(() => {
+                document.getElementById('server-status').textContent = 'Error';
+                document.getElementById('server-status').style.color = '#ef4444';
+            });
+    </script>
+</body>
+</html>

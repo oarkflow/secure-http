@@ -1,0 +1,758 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WASM Secure Client Demo</title>
+    <style>
+        :root {
+            --bg-primary: #0f172a;
+            --bg-secondary: #1e293b;
+            --bg-tertiary: #334155;
+            --text-primary: #f8fafc;
+            --text-secondary: #94a3b8;
+            --accent: #3b82f6;
+            --accent-hover: #2563eb;
+            --success: #22c55e;
+            --error: #ef4444;
+            --warning: #f59e0b;
+            --border: #475569;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        header {
+            text-align: center;
+            margin-bottom: 2rem;
+            padding-bottom: 1.5rem;
+            border-bottom: 1px solid var(--border);
+        }
+
+        h1 {
+            font-size: 2rem;
+            font-weight: 700;
+            margin-bottom: 0.5rem;
+            background: linear-gradient(135deg, var(--accent), #8b5cf6);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .subtitle {
+            color: var(--text-secondary);
+            font-size: 1rem;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .card {
+            background: var(--bg-secondary);
+            border-radius: 12px;
+            padding: 1.5rem;
+            border: 1px solid var(--border);
+        }
+
+        .card-header {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            margin-bottom: 1rem;
+        }
+
+        .card-icon {
+            width: 36px;
+            height: 36px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.1rem;
+        }
+
+        .card-icon.security {
+            background: rgba(59, 130, 246, 0.2);
+        }
+
+        .card-icon.assets {
+            background: rgba(34, 197, 94, 0.2);
+        }
+
+        .card-icon.fetch {
+            background: rgba(139, 92, 246, 0.2);
+        }
+
+        .card-icon.logs {
+            background: rgba(245, 158, 11, 0.2);
+        }
+
+        .card-title {
+            font-size: 1.1rem;
+            font-weight: 600;
+        }
+
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.35rem 0.75rem;
+            border-radius: 9999px;
+            font-size: 0.8rem;
+            font-weight: 500;
+        }
+
+        .status-badge.success {
+            background: rgba(34, 197, 94, 0.2);
+            color: var(--success);
+        }
+
+        .status-badge.error {
+            background: rgba(239, 68, 68, 0.2);
+            color: var(--error);
+        }
+
+        .status-badge.loading {
+            background: rgba(245, 158, 11, 0.2);
+            color: var(--warning);
+        }
+
+        .status-badge-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: currentColor;
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+
+            0%,
+            100% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0.5;
+            }
+        }
+
+        .info-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 0.5rem 0;
+            border-bottom: 1px solid var(--bg-tertiary);
+            font-size: 0.85rem;
+        }
+
+        .info-row:last-child {
+            border-bottom: none;
+        }
+
+        .info-label {
+            color: var(--text-secondary);
+        }
+
+        .info-value {
+            font-weight: 500;
+            font-family: monospace;
+        }
+
+        .btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.6rem 1rem;
+            border-radius: 8px;
+            font-size: 0.85rem;
+            font-weight: 500;
+            border: none;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .btn-primary {
+            background: var(--accent);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: var(--accent-hover);
+        }
+
+        .btn-secondary {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+        }
+
+        .btn-secondary:hover {
+            background: var(--border);
+        }
+
+        .btn-success {
+            background: var(--success);
+            color: white;
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .btn-group {
+            display: flex;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+            margin-top: 1rem;
+        }
+
+        .form-group {
+            margin-bottom: 0.75rem;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 0.3rem;
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+        }
+
+        .form-group input,
+        .form-group select {
+            width: 100%;
+            padding: 0.6rem;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            font-size: 0.85rem;
+        }
+
+        .form-group input:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+
+        .asset-list {
+            max-height: 150px;
+            overflow-y: auto;
+            background: var(--bg-primary);
+            border-radius: 8px;
+            padding: 0.5rem;
+            margin-top: 0.75rem;
+        }
+
+        .asset-item {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.4rem;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            font-family: monospace;
+            cursor: pointer;
+        }
+
+        .asset-item:hover {
+            background: var(--bg-tertiary);
+        }
+
+        .log-container {
+            background: var(--bg-primary);
+            border-radius: 8px;
+            padding: 0.75rem;
+            max-height: 200px;
+            overflow-y: auto;
+            font-family: monospace;
+            font-size: 0.75rem;
+            line-height: 1.6;
+        }
+
+        .log-entry {
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        .log-time {
+            color: var(--text-secondary);
+            flex-shrink: 0;
+        }
+
+        .log-message.info {
+            color: var(--accent);
+        }
+
+        .log-message.success {
+            color: var(--success);
+        }
+
+        .log-message.error {
+            color: var(--error);
+        }
+
+        .log-message.warning {
+            color: var(--warning);
+        }
+
+        .preview-container {
+            background: var(--bg-primary);
+            border-radius: 8px;
+            padding: 0.75rem;
+            margin-top: 0.75rem;
+            max-height: 200px;
+            overflow: auto;
+        }
+
+        .preview-content {
+            white-space: pre-wrap;
+            font-family: monospace;
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+        }
+
+        .loader-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: var(--bg-primary);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            transition: opacity 0.5s;
+        }
+
+        .loader-overlay.hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+
+        .loader-spinner {
+            width: 50px;
+            height: 50px;
+            border: 3px solid var(--bg-tertiary);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-bottom: 1rem;
+        }
+
+        @keyframes spin {
+            to {
+                transform: rotate(360deg);
+            }
+        }
+
+        .loader-text {
+            font-size: 1.1rem;
+            font-weight: 500;
+        }
+
+        .loader-subtext {
+            color: var(--text-secondary);
+            font-size: 0.85rem;
+        }
+
+        .full-width {
+            grid-column: 1 / -1;
+        }
+    </style>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+</head>
+
+<body>
+    <div id="loader" class="loader-overlay">
+        <div class="loader-spinner"></div>
+        <div class="loader-text">Loading WebAssembly...</div>
+        <div class="loader-subtext">Initializing security components</div>
+    </div>
+
+    <div class="container" id="main-content" style="display: none;">
+        <header>
+            <h1>🔐 WASM Secure Client Demo</h1>
+            <p class="subtitle">Asset serving & secure fetch with domain-based security</p>
+        </header>
+
+        <div class="grid">
+            <!-- Security Status -->
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-icon security">🛡️</div>
+                    <h2 class="card-title">Domain Security</h2>
+                </div>
+                <div id="security-status">
+                    <span class="status-badge loading"><span class="status-badge-dot"></span>Checking...</span>
+                </div>
+                <div id="security-info" style="margin-top: 0.75rem;"></div>
+                <div class="btn-group">
+                    <button class="btn btn-secondary" onclick="checkDomain()">🔄 Refresh</button>
+                </div>
+            </div>
+
+            <!-- Login (for Secure Fetch) -->
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-icon fetch">🔑</div>
+                    <h2 class="card-title">Login (for Secure Fetch)</h2>
+                </div>
+                <p style="color: var(--text-secondary); font-size: 0.8rem; margin-bottom: 0.75rem;">
+                    Login to get credentials for encrypted API calls.
+                </p>
+                <div class="form-group">
+                    <label>Server URL</label>
+                    <input type="text" id="server-url" value="http://localhost:8080">
+                </div>
+                <div class="form-group">
+                    <label>User Token (from server config)</label>
+                    <input type="text" id="user-token" placeholder="user-token-xxx" value="lab-user-token-alice">
+                </div>
+                <div class="btn-group">
+                    <button class="btn btn-success" onclick="doLogin()" id="btn-login">🚀 Login & Initialize</button>
+                </div>
+                <div id="login-status" style="margin-top: 0.75rem;"></div>
+            </div>
+
+            <!-- Embedded Assets -->
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-icon assets">📦</div>
+                    <h2 class="card-title">Embedded Assets</h2>
+                </div>
+                <p style="color: var(--text-secondary); font-size: 0.8rem;">
+                    Assets from embedded filesystem (no server needed).
+                </p>
+                <div class="btn-group">
+                    <button class="btn btn-primary" onclick="listAssets()" id="btn-list-assets" disabled>📂
+                        List</button>
+                    <button class="btn btn-secondary" onclick="loadFrontend()" id="btn-load-frontend" disabled>🚀
+                        Load</button>
+                </div>
+                <div id="assets-list" class="asset-list" style="display: none;"></div>
+            </div>
+
+            <!-- Secure API Requests -->
+            <div class="card">
+                <div class="card-header">
+                    <div class="card-icon fetch">🌐</div>
+                    <h2 class="card-title">Secure API Request</h2>
+                </div>
+                <div class="form-group">
+                    <label>Endpoint</label>
+                    <input type="text" id="sf-endpoint" value="/api/echo">
+                </div>
+                <div class="form-group" style="display: flex; gap: 0.5rem;">
+                    <div style="flex: 1;">
+                        <label>Method</label>
+                        <select id="sf-method">
+                            <option value="GET">GET</option>
+                            <option value="POST" selected>POST</option>
+                            <option value="PUT">PUT</option>
+                            <option value="DELETE">DELETE</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label>Body (JSON)</label>
+                    <input type="text" id="sf-body" value='{"message": "hello from WASM!"}'>
+                </div>
+                <div class="btn-group">
+                    <button class="btn btn-primary" onclick="makeSecureRequest()" id="btn-sf-request" disabled>🔒
+                        Send</button>
+                </div>
+                <div id="sf-response" class="preview-container" style="display: none;">
+                    <div class="preview-content" id="sf-response-content"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Activity Log -->
+        <div class="card full-width">
+            <div class="card-header">
+                <div class="card-icon logs">📋</div>
+                <h2 class="card-title">Activity Log</h2>
+            </div>
+            <div class="log-container" id="log-container"></div>
+            <div class="btn-group">
+                <button class="btn btn-secondary" onclick="clearLogs()">🗑️ Clear</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="wasm_exec.js"></script>
+    <script>
+        'use strict';
+
+        let securityToken = null;
+        let isLoggedIn = false;
+        let serverUrl = '';
+
+        function log(message, type = 'info') {
+            const container = document.getElementById('log-container');
+            const time = new Date().toLocaleTimeString();
+            const entry = document.createElement('div');
+            entry.className = 'log-entry';
+            entry.innerHTML = `<span class="log-time">[${time}]</span><span class="log-message ${type}">${escapeHtml(message)}</span>`;
+            container.appendChild(entry);
+            container.scrollTop = container.scrollHeight;
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function clearLogs() {
+            document.getElementById('log-container').innerHTML = '';
+            log('Logs cleared', 'info');
+        }
+
+        function updateLoader(text, subtext = '') {
+            const t = document.querySelector('.loader-text');
+            const s = document.querySelector('.loader-subtext');
+            if (t) t.textContent = text;
+            if (s) s.textContent = subtext;
+        }
+
+        function showMainContent() {
+            document.getElementById('loader').classList.add('hidden');
+            document.getElementById('main-content').style.display = 'block';
+        }
+
+        function enableAssetButtons() {
+            document.getElementById('btn-list-assets').disabled = false;
+            document.getElementById('btn-load-frontend').disabled = false;
+        }
+
+        function checkDomain() {
+            if (!window.goCheckDomain) {
+                log('goCheckDomain not available', 'error');
+                return null;
+            }
+
+            const result = window.goCheckDomain();
+            log(`Domain: ${result.hostname} - ${result.allowed ? 'Authorized' : 'Denied (' + result.authError + ')'}`,
+                result.allowed ? 'success' : 'error');
+
+            const statusEl = document.getElementById('security-status');
+            const infoEl = document.getElementById('security-info');
+
+            if (result.allowed) {
+                statusEl.innerHTML = `<span class="status-badge success"><span class="status-badge-dot"></span>Authorized</span>`;
+                securityToken = result.token;
+                enableAssetButtons();
+            } else {
+                statusEl.innerHTML = `<span class="status-badge error"><span class="status-badge-dot"></span>Denied</span>`;
+            }
+
+            infoEl.innerHTML = `
+                <div class="info-row"><span class="info-label">Domain</span><span class="info-value">${result.hostname}</span></div>
+                <div class="info-row"><span class="info-label">Status</span><span class="info-value">${result.allowed ? '✅' : '❌ ' + result.authError}</span></div>
+            `;
+
+            return result;
+        }
+
+        function listAssets() {
+            if (!securityToken || !window.goListAssets) return;
+
+            const result = window.goListAssets(securityToken);
+            if (result.error) {
+                log(`List error: ${result.error}`, 'error');
+                return;
+            }
+
+            const listEl = document.getElementById('assets-list');
+            listEl.style.display = 'block';
+            listEl.innerHTML = '';
+
+            const assets = result.assets;
+            log(`Found ${assets.length} assets`, 'success');
+
+            for (let i = 0; i < assets.length; i++) {
+                const item = document.createElement('div');
+                item.className = 'asset-item';
+                item.textContent = assets[i];
+                listEl.appendChild(item);
+            }
+        }
+
+        function loadFrontend() {
+            if (!securityToken || !window.goLoadFrontend) return;
+            const result = window.goLoadFrontend(securityToken);
+            if (result.error) {
+                log(`Load error: ${result.error}`, 'error');
+            } else if (result.success) {
+                log(`Frontend: ${result.assets.length} assets, ${result.html.length} chars HTML`, 'success');
+            }
+        }
+
+        async function doLogin() {
+            serverUrl = document.getElementById('server-url').value.trim();
+            const userToken = document.getElementById('user-token').value.trim();
+
+            if (!serverUrl || !userToken) {
+                log('Server URL and User Token required', 'error');
+                return;
+            }
+
+            const statusEl = document.getElementById('login-status');
+            statusEl.innerHTML = `<span class="status-badge loading"><span class="status-badge-dot"></span>Logging in...</span>`;
+
+            log(`Logging in to ${serverUrl}...`, 'info');
+
+            try {
+                // Step 1: Call /login to get credentials
+                const resp = await fetch(`${serverUrl}/login`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ user_token: userToken })
+                });
+
+                if (!resp.ok) {
+                    const err = await resp.json();
+                    throw new Error(err.error || `HTTP ${resp.status}`);
+                }
+
+                const creds = await resp.json();
+                log(`Login successful! Device: ${creds.deviceID}`, 'success');
+
+                // Step 2: Initialize secureFetch with returned credentials
+                if (!window.secureFetchInit) {
+                    throw new Error('secureFetchInit not available');
+                }
+
+                const config = {
+                    baseURL: serverUrl,
+                    deviceID: creds.deviceID,
+                    deviceSecret: creds.deviceSecret,
+                    gateSecrets: creds.gateSecrets,
+                    capabilityToken: creds.capabilityToken,
+                    accessToken: creds.accessToken,
+                    autoHandshake: true
+                };
+
+                log('Initializing secure fetch...', 'info');
+                await window.secureFetchInit(config);
+
+                isLoggedIn = true;
+                log('Secure fetch initialized! Ready for encrypted requests.', 'success');
+                statusEl.innerHTML = `<span class="status-badge success"><span class="status-badge-dot"></span>Connected as ${creds.userID}</span>`;
+
+                document.getElementById('btn-sf-request').disabled = false;
+
+            } catch (err) {
+                log(`Login failed: ${err.message}`, 'error');
+                statusEl.innerHTML = `<span class="status-badge error"><span class="status-badge-dot"></span>Failed</span>`;
+            }
+        }
+
+        async function makeSecureRequest() {
+            if (!isLoggedIn || !window.secureFetch) {
+                log('Not logged in - login first', 'error');
+                return;
+            }
+
+            const endpoint = document.getElementById('sf-endpoint').value;
+            const method = document.getElementById('sf-method').value;
+            const bodyStr = document.getElementById('sf-body').value;
+
+            let body = null;
+            if (bodyStr && method !== 'GET' && method !== 'DELETE') {
+                try {
+                    body = JSON.parse(bodyStr);
+                } catch (e) {
+                    log('Invalid JSON body', 'error');
+                    return;
+                }
+            }
+
+            log(`${method} ${endpoint}...`, 'info');
+
+            const responseEl = document.getElementById('sf-response');
+            const contentEl = document.getElementById('sf-response-content');
+            responseEl.style.display = 'block';
+            contentEl.textContent = 'Loading...';
+
+            try {
+                const result = await window.secureFetch({
+                    endpoint, method, body,
+                    responseType: 'json'
+                });
+
+                log('Request successful!', 'success');
+                contentEl.textContent = JSON.stringify(result, null, 2);
+            } catch (err) {
+                log(`Request error: ${err.message || err}`, 'error');
+                contentEl.textContent = `Error: ${err.message || err}`;
+            }
+        }
+
+        async function init() {
+            try {
+                updateLoader('Loading WebAssembly...', 'Fetching WASM module');
+                log('Loading WASM...', 'info');
+
+                const go = new Go();
+                const result = await WebAssembly.instantiateStreaming(fetch('app.wasm'), go.importObject);
+
+                updateLoader('Starting runtime...', 'Initializing');
+                go.run(result.instance);
+
+                let attempts = 0;
+                const checkReady = setInterval(() => {
+                    attempts++;
+                    if (window.goCheckDomain && window.secureFetchInit) {
+                        clearInterval(checkReady);
+                        log('WASM initialized', 'success');
+                        checkDomain();
+
+                        // Log available functions
+                        const funcs = ['secureFetchInit', 'secureFetch', 'secureFetchHandshake', 'goCheckDomain', 'goGetAsset'];
+                        funcs.forEach(f => {
+                            if (window[f]) log(`✓ ${f} available`, 'info');
+                        });
+
+                        setTimeout(showMainContent, 300);
+                    } else if (attempts >= 100) {
+                        clearInterval(checkReady);
+                        log('WASM init timeout', 'error');
+                        updateLoader('Failed', 'Timeout');
+                    }
+                }, 50);
+
+            } catch (err) {
+                log(`Init error: ${err.message}`, 'error');
+                updateLoader('Error', err.message);
+            }
+        }
+
+        init();
+    </script>
+</body>
+
+</html>

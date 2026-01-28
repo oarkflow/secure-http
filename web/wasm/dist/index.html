@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Secure Application - WASM Loaded</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <div class="app-container">
+        <header>
+            <div class="logo">🔐 SecureApp</div>
+            <div style="display: flex; gap: 1rem; align-items: center;">
+                <span class="badge">WASM Loaded ✓</span>
+                <button class="logout-btn" onclick="logout()">Logout</button>
+            </div>
+        </header>
+
+        <div class="user-info" id="userInfo">
+            <strong>User:</strong> <span id="userId">Loading...</span> |
+            <strong>Session:</strong> <span id="sessionStatus">Active</span>
+        </div>
+
+        <div class="hero">
+            <h1>Frontend Loaded from WASM</h1>
+            <p>This entire page was served from WASM embedded assets after authentication!</p>
+        </div>
+
+        <div class="cards">
+            <div class="card">
+                <h3>🔒 Domain Protected</h3>
+                <p>WASM validates the domain before serving any assets. Only whitelisted domains can access this
+                    content.</p>
+            </div>
+            <div class="card">
+                <h3>🔑 Security Token</h3>
+                <p>Time-based HMAC tokens ensure that assets can only be accessed by authenticated sessions.</p>
+            </div>
+            <div class="card">
+                <h3>📦 Embedded Assets</h3>
+                <p>All frontend files are compiled into the WASM binary, making them impossible to access without proper
+                    authorization.</p>
+            </div>
+        </div>
+
+        <div class="api-demo">
+            <h2>🚀 Secure API Demo</h2>
+            <p class="api-desc">Click the button to make a secure fetch to the protected API endpoint:</p>
+            <button class="btn" id="fetchBtn">Fetch Protected Data</button>
+            <div class="api-output" id="output">// API response will appear here...</div>
+        </div>
+
+        <div class="api-demo">
+            <h2>👤 User Info</h2>
+            <p class="api-desc">Test user info endpoint:</p>
+            <input type="text" id="userName" placeholder="Enter name"
+                style="width: 100%; padding: 0.5rem; margin-bottom: 0.5rem; background: #0f172a; border: 1px solid #334155; border-radius: 4px; color: #f8fafc;">
+            <button class="btn" id="userInfoBtn">Get User Info</button>
+            <div class="api-output" id="userOutput">// User info response...</div>
+        </div>
+
+        <div class="api-demo">
+            <h2>📁 File Upload</h2>
+            <p class="api-desc">Upload a file securely:</p>
+            <input type="file" id="fileInput" style="margin-bottom: 0.5rem;">
+            <button class="btn" id="uploadBtn">Upload File</button>
+            <div class="api-output" id="uploadOutput">// Upload response...</div>
+        </div>
+
+        <div class="api-demo">
+            <h2>📋 File List</h2>
+            <p class="api-desc">List uploaded files:</p>
+            <button class="btn" id="listFilesBtn">List Files</button>
+            <div class="api-output" id="filesOutput">// Files list...</div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+
+</html>

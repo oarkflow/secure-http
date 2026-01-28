@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Secure WASM Demos</title>
+    <style>
+        :root {
+            --bg-primary: #0f172a;
+            --bg-secondary: #1e293b;
+            --text-primary: #f8fafc;
+            --text-secondary: #94a3b8;
+            --accent: #3b82f6;
+            --accent-hover: #2563eb;
+            --border: #475569;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .container {
+            max-width: 800px;
+            padding: 2rem;
+        }
+
+        h1 {
+            font-size: 2.5rem;
+            margin-bottom: 1rem;
+            text-align: center;
+            background: linear-gradient(135deg, var(--accent), #10b981);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .subtitle {
+            text-align: center;
+            color: var(--text-secondary);
+            margin-bottom: 3rem;
+            font-size: 1.125rem;
+        }
+
+        .demos-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 1.5rem;
+            margin-bottom: 2rem;
+        }
+
+        .demo-card {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 2rem;
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+
+        .demo-card:hover {
+            transform: translateY(-4px);
+            border-color: var(--accent);
+            box-shadow: 0 8px 24px rgba(59, 130, 246, 0.2);
+        }
+
+        .demo-icon {
+            font-size: 3rem;
+            margin-bottom: 1rem;
+        }
+
+        .demo-title {
+            font-size: 1.25rem;
+            font-weight: 600;
+            margin-bottom: 0.5rem;
+        }
+
+        .demo-description {
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+            line-height: 1.6;
+            margin-bottom: 1rem;
+        }
+
+        .demo-features {
+            list-style: none;
+            padding: 0;
+            margin-bottom: 1rem;
+        }
+
+        .demo-features li {
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            padding: 0.25rem 0;
+        }
+
+        .demo-features li::before {
+            content: "✓ ";
+            color: #10b981;
+            font-weight: bold;
+            margin-right: 0.5rem;
+        }
+
+        .demo-link {
+            display: inline-block;
+            padding: 0.75rem 1.5rem;
+            background: var(--accent);
+            color: white;
+            text-decoration: none;
+            border-radius: 8px;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            text-align: center;
+            width: 100%;
+        }
+
+        .demo-link:hover {
+            background: var(--accent-hover);
+        }
+
+        .info-box {
+            background: rgba(59, 130, 246, 0.05);
+            border: 1px solid rgba(59, 130, 246, 0.2);
+            border-radius: 8px;
+            padding: 1.5rem;
+            margin-top: 2rem;
+        }
+
+        .info-box h3 {
+            margin-bottom: 0.75rem;
+            font-size: 1rem;
+        }
+
+        .info-box p {
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+            line-height: 1.6;
+        }
+
+        .info-box code {
+            background: var(--bg-primary);
+            padding: 0.25rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.85rem;
+            color: #10b981;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <h1>🔐 Secure WASM Demos</h1>
+        <p class="subtitle">Choose a demo to explore secure, encrypted communication</p>
+
+        <div class="demos-grid">
+            <!-- Login & Protected Assets Demo -->
+            <div class="demo-card" onclick="window.location.href='login.html'">
+                <div class="demo-icon">🎯</div>
+                <h2 class="demo-title">Login & Protected Assets</h2>
+                <p class="demo-description">
+                    Complete authentication flow with secure asset loading and encrypted API calls.
+                </p>
+                <ul class="demo-features">
+                    <li>User authentication (user-123)</li>
+                    <li>Session management</li>
+                    <li>Protected asset loading</li>
+                    <li>Secure API testing</li>
+                    <li>Activity monitoring</li>
+                </ul>
+                <a href="login.html" class="demo-link">Start Demo →</a>
+            </div>
+
+            <!-- Original WASM Demo -->
+            <div class="demo-card" onclick="window.location.href='index.html'">
+                <div class="demo-icon">🔬</div>
+                <h2 class="demo-title">Advanced WASM Demo</h2>
+                <p class="demo-description">
+                    Original comprehensive demo with advanced features and testing capabilities.
+                </p>
+                <ul class="demo-features">
+                    <li>Complete WASM integration</li>
+                    <li>Advanced crypto features</li>
+                    <li>File upload/download</li>
+                    <li>Session management</li>
+                    <li>Comprehensive testing</li>
+                </ul>
+                <a href="index.html" class="demo-link">Launch Demo →</a>
+            </div>
+        </div>
+
+        <div class="info-box">
+            <h3>📚 Getting Started</h3>
+            <p>
+                <strong>Login & Protected Assets Demo:</strong> Use credentials
+                <code>user-123</code> / <code>user-token-123</code> to login and access protected resources.
+                Perfect for understanding authentication flows and secure asset loading.
+            </p>
+            <p style="margin-top: 0.75rem;">
+                <strong>Advanced WASM Demo:</strong> Explore the full capabilities of WASM-based encryption,
+                including file operations, advanced API testing, and session management features.
+            </p>
+        </div>
+    </div>
+</body>
+
+</html>
