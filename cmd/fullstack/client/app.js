@@ -1,5 +1,5 @@
 
-import { SecureClient } from "../../../web/client/src/index.js";
+import { SecureClient } from "./index.js";
 
 let consoleEl;
 let statusEl;
