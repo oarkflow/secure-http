@@ -17,7 +17,7 @@ run: wasm run-server
 # Build the fetch WASM module and copy runtime shim
 wasm:
 	@echo "Building fetch.wasm..."
-	GOOS=js GOARCH=wasm go build -trimpath -ldflags="-s -w" -o web/demo/fetch.wasm ./cmd/wasm
+	GOOS=js GOARCH=wasm go build -trimpath -ldflags="-s -w" -o cmd/fullstack/client/fetch.wasm ./cmd/wasm
 
 	@echo "Searching for wasm_exec.js..."
 	@if [ -z "$(WASM_EXEC)" ]; then \
@@ -32,9 +32,9 @@ wasm:
 	fi
 
 	@echo "Found wasm_exec.js at: $(WASM_EXEC)"
-	cp "$(WASM_EXEC)" web/demo/
+	cp "$(WASM_EXEC)" cmd/fullstack/client/
 
-	@echo "WASM build complete. Files in web/demo/"
+	@echo "WASM build complete. Files in cmd/fullstack/client/"
 
 # Run the secure HTTP server
 run-server:

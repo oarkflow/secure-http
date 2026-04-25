@@ -128,10 +128,7 @@ async function handleLogin(event) {
             sessionStorage.setItem('refreshToken', config.refreshToken);
         }
 
-        // 2. Initialize SecureClient with WASM
-        await client.init();
-
-        // 3. Configure and perform handshake (autoHandshake does this automatically)
+        // 2. Configure and initialize the secure client
         const secureConfig = {
             baseURL: config.baseURL || window.location.origin,
             deviceID: config.deviceID,
@@ -145,11 +142,8 @@ async function handleLogin(event) {
         };
 
         log("Initializing secure channel with auto-handshake...");
-        await window.secureFetchInit(secureConfig);
+        await client.init(secureConfig);
         log("Secure channel initialized and handshake completed");
-
-        // Update client ready state
-        client.isReady = true;
 
         // 4. Call the secure /api/login endpoint to establish application session
         const appLoginPayload = {
@@ -251,9 +245,6 @@ async function restoreLoginState() {
         log(`Restoring session for ${state.userID}...`);
         setStatus("Restoring session...", "idle");
 
-        // Re-initialize WASM client
-        await client.init();
-
         // Restore session config with stored access token
         const restoreConfig = {
             ...state.config,
@@ -262,11 +253,9 @@ async function restoreLoginState() {
         };
 
         log("Re-establishing secure channel...");
-        await window.secureFetchInit(restoreConfig);
+        await client.init(restoreConfig);
         log("Secure channel restored");
 
-        // Update state
-        client.isReady = true;
         currentUserID = state.userID;
         loggedIn = true;
         updateControls();
@@ -570,7 +559,6 @@ document.addEventListener("DOMContentLoaded", async () => {
         patchBtn.addEventListener("click", handlePatchRequest);
     }
 
-    // Initialize WASM client
     try {
         await client.init();
         log("SecureClient WASM initialized");

@@ -1,3 +1,4 @@
 *.log
 *.fiber.gz
 .idea
+node_modules

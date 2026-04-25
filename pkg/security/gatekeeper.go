@@ -265,8 +265,8 @@ type GatekeeperConfig struct {
 	RateLimiter     RateLimiter
 	Logger          AuditLogger
 	// Additional security
-	AllowedOrigins []string // List of allowed origins
-	StrictOrigin   bool     // Reject if origin is missing or not in list
+	AllowedOrigins []string                // List of allowed origins
+	StrictOrigin   bool                    // Reject if origin is missing or not in list
 	StatelessAuth  *StatelessAuthenticator // Optional stateless JWT auth
 }
 
@@ -280,13 +280,13 @@ type GateRequest struct {
 
 // Gatekeeper enforces the pre-routing crypto gate.
 type Gatekeeper struct {
-	secrets         map[string]RotatingSecret
-	cfg             GatekeeperConfig
-	nonce           NonceStore
-	limiter         RateLimiter
-	logger          AuditLogger
-	mu              sync.RWMutex
-	allowedOrigins  map[string]bool // Pre-computed origin map
+	secrets        map[string]RotatingSecret
+	cfg            GatekeeperConfig
+	nonce          NonceStore
+	limiter        RateLimiter
+	logger         AuditLogger
+	mu             sync.RWMutex
+	allowedOrigins map[string]bool // Pre-computed origin map
 }
 
 // NewGatekeeper initializes the gatekeeper instance.
@@ -348,24 +348,32 @@ func (g *Gatekeeper) Evaluate(req GateRequest) (*Capability, error) {
 		return nil, errors.New("gatekeeper unset")
 	}
 
-	// 1. Check origin if configured
-	if len(g.cfg.AllowedOrigins) > 0 || g.cfg.StrictOrigin {
-		origin := req.Headers["Origin"]
-		if origin == "" {
-			origin = req.Headers["Referer"]
-		}
-		if !g.isOriginAllowed(origin) {
-			g.audit(AuditEventGateDenied, "", req.RemoteAddr, "", "origin not allowed", ErrOriginNotAllowed)
-			return nil, ErrOriginNotAllowed
-		}
-	}
-
 	headers := req.Headers
 	header := func(key string) string {
 		if headers == nil {
 			return ""
 		}
-		return strings.TrimSpace(headers[key])
+		if value, ok := headers[key]; ok {
+			return strings.TrimSpace(value)
+		}
+		for existingKey, value := range headers {
+			if strings.EqualFold(existingKey, key) {
+				return strings.TrimSpace(value)
+			}
+		}
+		return ""
+	}
+
+	// 1. Check origin if configured
+	if len(g.cfg.AllowedOrigins) > 0 || g.cfg.StrictOrigin {
+		origin := header("Origin")
+		if origin == "" {
+			origin = header("Referer")
+		}
+		if !g.isOriginAllowed(origin) {
+			g.audit(AuditEventGateDenied, "", req.RemoteAddr, "", "origin not allowed", ErrOriginNotAllowed)
+			return nil, ErrOriginNotAllowed
+		}
 	}
 
 	secretID := header(g.cfg.Headers.SecretID)

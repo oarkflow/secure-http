@@ -27,8 +27,10 @@ const (
 
 // GateSecret identifies a rotating pre-routing secret.
 type GateSecret struct {
-	ID     string
-	Secret []byte
+	ID        string
+	Secret    []byte
+	NotBefore time.Time
+	ExpiresAt time.Time
 }
 
 // GateClientConfig describes the pre-routing crypto gate options.
@@ -103,9 +105,48 @@ func cloneGateSecrets(src []GateSecret) []GateSecret {
 		}
 		secretCopy := make([]byte, len(s.Secret))
 		copy(secretCopy, s.Secret)
-		clones = append(clones, GateSecret{ID: s.ID, Secret: secretCopy})
+		clones = append(clones, GateSecret{
+			ID:        s.ID,
+			Secret:    secretCopy,
+			NotBefore: s.NotBefore,
+			ExpiresAt: s.ExpiresAt,
+		})
 	}
 	return clones
+}
+
+func (s GateSecret) ActiveAt(now time.Time) bool {
+	if now.IsZero() {
+		now = time.Now()
+	}
+	if s.ID == "" || len(s.Secret) == 0 {
+		return false
+	}
+	if !s.NotBefore.IsZero() && now.Before(s.NotBefore) {
+		return false
+	}
+	if !s.ExpiresAt.IsZero() && now.After(s.ExpiresAt) {
+		return false
+	}
+	return true
+}
+
+func selectActiveGateSecret(secrets []GateSecret, now time.Time) (GateSecret, error) {
+	var selected GateSecret
+	found := false
+	for _, secret := range secrets {
+		if !secret.ActiveAt(now) {
+			continue
+		}
+		if !found || secret.NotBefore.After(selected.NotBefore) {
+			selected = secret
+			found = true
+		}
+	}
+	if !found {
+		return GateSecret{}, fmt.Errorf("no active gate secret available")
+	}
+	return selected, nil
 }
 
 func (c *SecureClient) applyGateHeaders(req *http.Request, method, endpoint string) error {
@@ -122,9 +163,9 @@ func (c *SecureClient) applyGateHeaders(req *http.Request, method, endpoint stri
 	if len(secrets) == 0 {
 		return fmt.Errorf("gate secret missing")
 	}
-	secret := secrets[0]
-	if secret.ID == "" || len(secret.Secret) == 0 {
-		return fmt.Errorf("gate secret invalid")
+	secret, err := selectActiveGateSecret(secrets, time.Now())
+	if err != nil {
+		return err
 	}
 	nonce, err := randomNonce(nonceSize)
 	if err != nil {

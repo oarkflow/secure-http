@@ -1,0 +1,12 @@
+{
+  "name": "secure-http-tests",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test:node": "node --test cmd/fullstack/client/*.test.js",
+    "test:e2e": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.54.0"
+  }
+}

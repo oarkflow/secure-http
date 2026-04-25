@@ -84,7 +84,20 @@ func (gate ClientGateBlock) buildGateSecrets() ([]pkgclient.GateSecret, error) {
 		if err != nil {
 			return nil, fmt.Errorf("gate secret %s: %w", def.ID, err)
 		}
-		secrets = append(secrets, pkgclient.GateSecret{ID: def.ID, Secret: material})
+		notBefore, err := parseOptionalTime(def.NotBefore)
+		if err != nil {
+			return nil, fmt.Errorf("gate secret %s: %w", def.ID, err)
+		}
+		expiresAt, err := parseOptionalTime(def.ExpiresAt)
+		if err != nil {
+			return nil, fmt.Errorf("gate secret %s: %w", def.ID, err)
+		}
+		secrets = append(secrets, pkgclient.GateSecret{
+			ID:        def.ID,
+			Secret:    material,
+			NotBefore: notBefore,
+			ExpiresAt: expiresAt,
+		})
 	}
 	return secrets, nil
 }

@@ -487,7 +487,12 @@ func parseGateSecretEntry(entry js.Value) (clientpkg.GateSecret, error) {
 	if id == "" || !secretVal.Truthy() {
 		return clientpkg.GateSecret{}, errors.New("each gateSecret requires id and secret")
 	}
-	return buildGateSecret(id, secretVal)
+	return buildGateSecret(
+		id,
+		secretVal,
+		firstStringProp(entry, "notBefore", "not_before"),
+		firstStringProp(entry, "expiresAt", "expires_at"),
+	)
 }
 
 func parseSingleGateSecret(val js.Value) (clientpkg.GateSecret, error) {
@@ -502,7 +507,7 @@ func parseSingleGateSecret(val js.Value) (clientpkg.GateSecret, error) {
 	if !secretVal.Truthy() {
 		return clientpkg.GateSecret{}, errors.New("gateSecret value is required")
 	}
-	return buildGateSecret(id, secretVal)
+	return buildGateSecret(id, secretVal, "", "")
 }
 
 func firstStringProp(val js.Value, keys ...string) string {
@@ -518,7 +523,7 @@ func firstStringProp(val js.Value, keys ...string) string {
 	return ""
 }
 
-func buildGateSecret(id string, secretVal js.Value) (clientpkg.GateSecret, error) {
+func buildGateSecret(id string, secretVal js.Value, notBeforeRaw string, expiresAtRaw string) (clientpkg.GateSecret, error) {
 	secretBytes, err := valueToBytes(secretVal)
 	if err != nil {
 		return clientpkg.GateSecret{}, err
@@ -526,7 +531,26 @@ func buildGateSecret(id string, secretVal js.Value) (clientpkg.GateSecret, error
 	if len(secretBytes) == 0 {
 		return clientpkg.GateSecret{}, errors.New("gateSecret cannot be empty")
 	}
-	return clientpkg.GateSecret{ID: id, Secret: secretBytes}, nil
+	var notBefore time.Time
+	if strings.TrimSpace(notBeforeRaw) != "" {
+		notBefore, err = time.Parse(time.RFC3339, strings.TrimSpace(notBeforeRaw))
+		if err != nil {
+			return clientpkg.GateSecret{}, fmt.Errorf("invalid gateSecret notBefore: %w", err)
+		}
+	}
+	var expiresAt time.Time
+	if strings.TrimSpace(expiresAtRaw) != "" {
+		expiresAt, err = time.Parse(time.RFC3339, strings.TrimSpace(expiresAtRaw))
+		if err != nil {
+			return clientpkg.GateSecret{}, fmt.Errorf("invalid gateSecret expiresAt: %w", err)
+		}
+	}
+	return clientpkg.GateSecret{
+		ID:        id,
+		Secret:    secretBytes,
+		NotBefore: notBefore,
+		ExpiresAt: expiresAt,
+	}, nil
 }
 
 func normalizeEndpoint(endpoint string) string {

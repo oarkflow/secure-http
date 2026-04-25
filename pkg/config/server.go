@@ -13,19 +13,25 @@ import (
 // ServerConfig represents the persisted runtime configuration.
 type ServerConfig struct {
 	ListenAddr   string                 `json:"listen_addr"`
+	Runtime      RuntimeConfig          `json:"runtime"`
 	Gate         GateConfig             `json:"gate"`
 	Capabilities []CapabilityDefinition `json:"capabilities"`
 	Devices      []DeviceDefinition     `json:"devices"`
 	Users        []UserDefinition       `json:"users"`
 	Alerts       AlertingConfig         `json:"alerts"`
 	Auth         AuthConfig             `json:"auth"`
+	Uploads      UploadConfig           `json:"uploads"`
+}
+
+type RuntimeConfig struct {
+	Mode string `json:"mode"`
 }
 
 // AuthConfig toggles user/device requirements.
 type AuthConfig struct {
-	RequireDevice  bool   `json:"require_device"`
-	RequireUser    bool   `json:"require_user"`
-	JWTSigningKey  string `json:"jwt_signing_key"`
+	RequireDevice bool   `json:"require_device"`
+	RequireUser   bool   `json:"require_user"`
+	JWTSigningKey string `json:"jwt_signing_key"`
 }
 
 // GateConfig declares the pre-routing gate settings.
@@ -90,6 +96,15 @@ type AlertingConfig struct {
 	LogFile       string                    `json:"log_file"`
 }
 
+type UploadConfig struct {
+	Directory      string   `json:"directory"`
+	MaxBytes       int      `json:"max_bytes"`
+	MaxFiles       int      `json:"max_files"`
+	AllowedTypes   []string `json:"allowed_types"`
+	AllowDownloads bool     `json:"allow_downloads"`
+	AllowListing   bool     `json:"allow_listing"`
+}
+
 // LoadServerConfig loads and validates the server configuration file.
 func LoadServerConfig(path string) (*ServerConfig, error) {
 	data, err := os.ReadFile(path)
@@ -107,7 +122,80 @@ func LoadServerConfig(path string) (*ServerConfig, error) {
 		cfg.Auth.RequireDevice = true
 		cfg.Auth.RequireUser = true
 	}
+	cfg.normalize()
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
 	return &cfg, nil
+}
+
+func (cfg *ServerConfig) normalize() {
+	if cfg == nil {
+		return
+	}
+	cfg.Runtime.Mode = strings.ToLower(strings.TrimSpace(cfg.Runtime.Mode))
+	if cfg.Runtime.Mode == "" {
+		cfg.Runtime.Mode = "strict"
+	}
+	if cfg.Uploads.Directory == "" {
+		cfg.Uploads.Directory = "uploads"
+	}
+	if cfg.Uploads.MaxBytes <= 0 {
+		cfg.Uploads.MaxBytes = 10 * 1024 * 1024
+	}
+	if cfg.Uploads.MaxFiles <= 0 {
+		cfg.Uploads.MaxFiles = 4
+	}
+	if len(cfg.Uploads.AllowedTypes) == 0 {
+		cfg.Uploads.AllowedTypes = []string{
+			"text/plain",
+			"application/json",
+			"image/png",
+			"image/jpeg",
+			"application/pdf",
+			"application/octet-stream",
+		}
+	}
+}
+
+func (cfg *ServerConfig) IsStrictMode() bool {
+	if cfg == nil {
+		return true
+	}
+	mode := strings.ToLower(strings.TrimSpace(cfg.Runtime.Mode))
+	return mode == "" || mode == "strict"
+}
+
+func (cfg *ServerConfig) Validate() error {
+	if cfg == nil {
+		return fmt.Errorf("server config is nil")
+	}
+	if cfg.IsStrictMode() {
+		if looksLikePlaceholderSecret(cfg.Auth.JWTSigningKey) {
+			return fmt.Errorf("strict mode requires a non-placeholder auth.jwt_signing_key")
+		}
+		for _, secret := range cfg.Gate.Secrets {
+			if looksLikePlaceholderSecret(secret.Material) {
+				return fmt.Errorf("strict mode requires a non-placeholder gate secret for %s", secret.ID)
+			}
+		}
+		for _, device := range cfg.Devices {
+			if looksLikePlaceholderSecret(device.Secret) {
+				return fmt.Errorf("strict mode requires non-placeholder device secret for %s", device.ID)
+			}
+		}
+		if len(cfg.Gate.AllowedOrigins) == 0 {
+			return fmt.Errorf("strict mode requires at least one allowed origin")
+		}
+	}
+	return nil
+}
+
+func (cfg *ServerConfig) CORSAllowOrigins() string {
+	if cfg == nil || len(cfg.Gate.AllowedOrigins) == 0 {
+		return ""
+	}
+	return strings.Join(cfg.Gate.AllowedOrigins, ",")
 }
 
 // BuildCapabilityStore hydrates a memory-backed store from config.
@@ -181,6 +269,8 @@ func (cfg *ServerConfig) GatekeeperConfig(store security.CapabilityStore, logger
 		CapabilityStore: store,
 		RateLimiter:     limiter,
 		Logger:          logger,
+		AllowedOrigins:  append([]string{}, cfg.Gate.AllowedOrigins...),
+		StrictOrigin:    cfg.Gate.StrictOrigin || cfg.IsStrictMode(),
 	}, nil
 }
 

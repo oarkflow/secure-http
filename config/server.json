@@ -1,5 +1,8 @@
 {
 	"listen_addr": ":8443",
+	"runtime": {
+		"mode": "demo"
+	},
 	"auth": {
 		"require_device": true,
 		"require_user": true,
@@ -10,8 +13,11 @@
 		"nonce_ttl": "2m",
 		"allowed_origins": [
 			"http://localhost:8443",
+			"http://127.0.0.1:8443",
             "http://localhost:3010",
-            "http://localhost:8081"
+            "http://127.0.0.1:3010",
+            "http://localhost:8081",
+            "http://127.0.0.1:8081"
 		],
 		"strict_origin": false,
 		"rate_limit": {
@@ -71,5 +77,20 @@
 		"webhook_url": "",
 		"min_interval": "5s",
 		"include_events": [ ]
+	},
+	"uploads": {
+		"directory": "uploads",
+		"max_bytes": 10485760,
+		"max_files": 4,
+		"allowed_types": [
+			"text/plain",
+			"application/json",
+			"image/png",
+			"image/jpeg",
+			"application/pdf",
+			"application/octet-stream"
+		],
+		"allow_downloads": true,
+		"allow_listing": true
 	}
 }

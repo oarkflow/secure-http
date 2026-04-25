@@ -39,6 +39,15 @@ type pentestRequest struct {
 	Notes   string                 `json:"notes"`
 }
 
+type uploadPolicy struct {
+	Directory      string
+	MaxBytes       int
+	MaxFiles       int
+	AllowedTypes   map[string]struct{}
+	AllowDownloads bool
+	AllowListing   bool
+}
+
 func main() {
 	var (
 		configPath   = flag.String("config", defaultConfigPath(), "Path to server configuration JSON")
@@ -57,20 +66,18 @@ func main() {
 		log.Fatalf("static assets: %v", err)
 	}
 
-	// Initialize stateless authenticator
 	authKey := []byte(cfg.Auth.JWTSigningKey) // Use key from config
 	if len(authKey) == 0 {
-		// Fallback to a default key for development (should be in config for production)
-		authKey = []byte("your-secure-256-bit-secret-key-minimum-32-chars")
-		log.Println("⚠️  Using default JWT signing key - set jwt_signing_key in config for production")
+		log.Fatalf("jwt signing key is required")
 	}
 	statelessAuth, err := security.NewStatelessAuthenticator(security.StatelessAuthConfig{
-		SigningKey:       authKey,
-		AccessTokenTTL:   15 * time.Minute,
-		RefreshTokenTTL:  7 * 24 * time.Hour,
-		Algorithm:        "HS512",
-		Issuer:           "secure-http-server",
-		Audience:         "secure-http-api",
+		SigningKey:         authKey,
+		AccessTokenTTL:     15 * time.Minute,
+		RefreshTokenTTL:    7 * 24 * time.Hour,
+		Algorithm:          "HS512",
+		Issuer:             "secure-http-server",
+		Audience:           "secure-http-api",
+		RequireFingerprint: true,
 	})
 	if err != nil {
 		log.Fatalf("initialize stateless auth: %v", err)
@@ -134,20 +141,21 @@ func main() {
 
 	app.Use(recover.New())
 	app.Use(logger.New())
-	app.Use(cors.New(cors.Config{
-		AllowOrigins:     "http://localhost:3010,http://localhost:8080,http://localhost:8081,http://127.0.0.1:8081,http://localhost:8443,http://127.0.0.1:8443",
-		AllowMethods:     "GET,POST,PUT,DELETE,OPTIONS",
-		AllowHeaders:     "Origin,Content-Type,Accept,Authorization,X-Gate-Time,X-Gate-Sign,X-Gate-Purpose,X-Gate-Seq,X-Gate-Key,X-Gate-Nonce,X-Gate-Timestamp,X-Gate-Signature,X-Capability-Token,X-Session-ID,X-User-Token,X-Original-Content-Type",
-		AllowCredentials: true,
-		MaxAge:           86400,
-	}))
+	if allowOrigins := cfg.CORSAllowOrigins(); allowOrigins != "" {
+		app.Use(cors.New(cors.Config{
+			AllowOrigins:     allowOrigins,
+			AllowMethods:     "GET,POST,PUT,DELETE,PATCH,OPTIONS",
+			AllowHeaders:     "Origin,Referer,Content-Type,Accept,Authorization,X-Gate-Time,X-Gate-Sign,X-Gate-Purpose,X-Gate-Seq,X-Gate-Key,X-Gate-Nonce,X-Gate-Timestamp,X-Gate-Signature,X-Capability-Token,X-Session-ID,X-User-Token,X-Original-Content-Type",
+			AllowCredentials: true,
+			MaxAge:           86400,
+		}))
+	}
 
 	gateMiddleware := httpmw.NewGateMiddleware(gatekeeper)
 
-	// JWT middleware for protected routes
 	jwtMiddleware := httpmw.NewStatelessAuthMiddleware(statelessAuth)
+	uploads := newUploadPolicy(cfg.Uploads)
 
-	// Register API routes BEFORE static file middleware to prevent conflicts
 	app.Post("/handshake", gateMiddleware.Handle(), cryptoMiddleware.Handshake())
 
 	app.Get("/health", func(c *fiber.Ctx) error {
@@ -157,7 +165,9 @@ func main() {
 		})
 	})
 
-	app.Post("/login", handleLogon(cfg, userAuth, deviceRegistry, statelessAuth))
+	if !cfg.IsStrictMode() {
+		app.Post("/login", handleLogon(cfg, userAuth, deviceRegistry, statelessAuth))
+	}
 
 	api := app.Group("/api")
 	api.Use(gateMiddleware.Handle()) // Gate applies to all encrypted APIs
@@ -165,37 +175,10 @@ func main() {
 	api.Use(cryptoMiddleware.Decrypt())
 	api.Use(cryptoMiddleware.Encrypt())
 
-	registerSecureRoutes(api, auditLogger, cryptoMiddleware.GetSessionManager())
+	registerSecureRoutes(api, auditLogger, cryptoMiddleware.GetSessionManager(), uploads)
 
 	prefix := normalizePrefix(*staticPrefix)
-	// Mount the entire web directory at the root to ensure cross-module imports work
-	// e.g. /demo/app.js can import from /client/src/index.js
-	// Note: Browse is disabled to prevent conflicts with API routes
-	app.Static("/", "web", fiber.Static{
-		Compress:      true,
-		Browse:        false,
-		Index:         "index.html",
-		CacheDuration: 30 * time.Minute,
-		MaxAge:        600,
-	})
-
-	// Also keep the demo prefix static for backward compatibility if needed,
-	// but mapping to the specific demo folder.
-	app.Static(prefix, *webRoot, fiber.Static{
-		Compress:      true,
-		Browse:        true,
-		Index:         "index.html",
-		CacheDuration: 30 * time.Minute,
-		MaxAge:        600,
-	})
-
-	app.Get("/", func(c *fiber.Ctx) error {
-		target := prefix
-		if !strings.HasSuffix(target, "/") {
-			target += "/"
-		}
-		return c.Redirect(target, fiber.StatusTemporaryRedirect)
-	})
+	registerStaticRoutes(app, prefix, *webRoot)
 
 	log.Printf("🧪 Full-stack secure demo available on %s", listenAddr)
 	log.Printf("   • Static lab: http://localhost%s%s/", listenAddr, prefix)
@@ -203,8 +186,7 @@ func main() {
 	log.Fatal(app.Listen(listenAddr))
 }
 
-func registerSecureRoutes(api fiber.Router, auditLogger security.AuditLogger, sessionManager *crypto.SessionManager) {
-	// Support all HTTP methods
+func registerSecureRoutes(api fiber.Router, auditLogger security.AuditLogger, sessionManager *crypto.SessionManager, uploads uploadPolicy) {
 	api.Get("/echo", handleEcho())
 	api.Post("/echo", handleEcho())
 	api.Put("/echo", handleEcho())
@@ -217,16 +199,89 @@ func registerSecureRoutes(api fiber.Router, auditLogger security.AuditLogger, se
 	api.Post("/session/state", handleSessionState())
 	api.Post("/pentest/probe", handlePentestProbe(auditLogger))
 	api.Post("/logout", handleLogout(sessionManager, auditLogger))
-	api.Post("/upload", handleFileUpload(auditLogger))
-	api.Get("/files", handleListFiles())
-	api.Get("/files/:filename", handleDownloadFile())
+	api.Post("/upload", handleFileUpload(auditLogger, uploads))
+	api.Get("/files", handleListFiles(uploads))
+	api.Get("/files/:filename", handleDownloadFile(uploads))
 
 	// Protected API endpoint for demo
 	api.Get("/protected", handleProtected())
 
 	// Secure asset loading - protected route for demo assets
 	api.Get("/assets/:filename", handleSecureAsset(auditLogger))
+}
 
+func registerStaticRoutes(app *fiber.App, prefix string, webRoot string) {
+	app.Static("/", "web", fiber.Static{
+		Compress:      true,
+		Browse:        false,
+		Index:         "index.html",
+		CacheDuration: 30 * time.Minute,
+		MaxAge:        600,
+	})
+	app.Static(prefix, webRoot, fiber.Static{
+		Compress:      true,
+		Browse:        false,
+		Index:         "index.html",
+		CacheDuration: 30 * time.Minute,
+		MaxAge:        600,
+	})
+	app.Get("/", func(c *fiber.Ctx) error {
+		target := prefix
+		if !strings.HasSuffix(target, "/") {
+			target += "/"
+		}
+		return c.Redirect(target, fiber.StatusTemporaryRedirect)
+	})
+}
+
+func newUploadPolicy(cfg config.UploadConfig) uploadPolicy {
+	policy := uploadPolicy{
+		Directory:      cfg.Directory,
+		MaxBytes:       cfg.MaxBytes,
+		MaxFiles:       cfg.MaxFiles,
+		AllowedTypes:   make(map[string]struct{}, len(cfg.AllowedTypes)),
+		AllowDownloads: cfg.AllowDownloads,
+		AllowListing:   cfg.AllowListing,
+	}
+	for _, item := range cfg.AllowedTypes {
+		trimmed := strings.TrimSpace(strings.ToLower(item))
+		if trimmed != "" {
+			policy.AllowedTypes[trimmed] = struct{}{}
+		}
+	}
+	return policy
+}
+
+func (p uploadPolicy) isAllowedType(contentType string) bool {
+	if len(p.AllowedTypes) == 0 {
+		return true
+	}
+	normalized := strings.ToLower(strings.TrimSpace(contentType))
+	if normalized == "" {
+		return false
+	}
+	if _, ok := p.AllowedTypes[normalized]; ok {
+		return true
+	}
+	if idx := strings.Index(normalized, ";"); idx > 0 {
+		normalized = strings.TrimSpace(normalized[:idx])
+		_, ok := p.AllowedTypes[normalized]
+		return ok
+	}
+	return false
+}
+
+func sanitizeUploadName(name string) string {
+	trimmed := strings.TrimSpace(filepath.Base(name))
+	if trimmed == "" || trimmed == "." || trimmed == ".." {
+		return "upload.bin"
+	}
+	replacer := strings.NewReplacer("..", "", "/", "_", "\\", "_", " ", "_")
+	safe := replacer.Replace(trimmed)
+	if safe == "" {
+		return "upload.bin"
+	}
+	return safe
 }
 
 func handleEcho() fiber.Handler {
@@ -272,7 +327,7 @@ func handleProtected() fiber.Handler {
 				"timestamp": time.Now().Format(time.RFC3339),
 				"user":      userCtx,
 				"security": fiber.Map{
-					"encrypted": true,
+					"encrypted":     true,
 					"authenticated": true,
 				},
 			},
@@ -521,7 +576,7 @@ func requireSession(c *fiber.Ctx) (*crypto.Session, error) {
 	return session, nil
 }
 
-func handleFileUpload(auditLogger security.AuditLogger) fiber.Handler {
+func handleFileUpload(auditLogger security.AuditLogger, policy uploadPolicy) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		// Get decrypted multipart body
 		body, err := decryptedBody(c)
@@ -603,53 +658,59 @@ func handleFileUpload(auditLogger security.AuditLogger) fiber.Handler {
 			fileContentType = ctValues[0]
 		}
 
-		// Create uploads directory if it doesn't exist
-		uploadsDir := "uploads"
-		if err := os.MkdirAll(uploadsDir, 0755); err != nil {
+		if err := os.MkdirAll(policy.Directory, 0755); err != nil {
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to create uploads directory"})
 		}
 
-		// Extract file info and save files
 		var fileInfo []fiber.Map
+		fileCount := 0
 		for fieldName, files := range form.File {
 			for _, fileHeader := range files {
+				fileCount++
+				if policy.MaxFiles > 0 && fileCount > policy.MaxFiles {
+					return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Too many files in upload"})
+				}
 				file, err := fileHeader.Open()
 				if err != nil {
 					continue
 				}
 				data, _ := io.ReadAll(file)
 				file.Close()
+				if policy.MaxBytes > 0 && len(data) > policy.MaxBytes {
+					return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Uploaded file exceeds configured size limit"})
+				}
 
-				// Generate unique filename with timestamp
 				timestamp := time.Now().Format("20060102-150405")
-				ext := filepath.Ext(fileHeader.Filename)
-				baseName := strings.TrimSuffix(fileHeader.Filename, ext)
+				safeName := sanitizeUploadName(fileHeader.Filename)
+				ext := filepath.Ext(safeName)
+				baseName := strings.TrimSuffix(safeName, ext)
 				uniqueFilename := fmt.Sprintf("%s-%s%s", baseName, timestamp, ext)
-				filePath := filepath.Join(uploadsDir, uniqueFilename)
+				filePath := filepath.Join(policy.Directory, uniqueFilename)
 
-				// Save file to disk
 				if err := os.WriteFile(filePath, data, 0644); err != nil {
 					log.Printf("Failed to save file %s: %v", uniqueFilename, err)
 					continue
 				}
 
-				// Use extracted content type if available, otherwise fall back to header
 				detectedType := fileContentType
 				if headerType := fileHeader.Header.Get("Content-Type"); headerType != "" && headerType != "application/octet-stream" {
 					detectedType = headerType
 				}
+				if !policy.isAllowedType(detectedType) {
+					_ = os.Remove(filePath)
+					return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Uploaded file type is not allowed"})
+				}
 
 				fileInfo = append(fileInfo, fiber.Map{
-					"field":         fieldName,
-					"filename":      fileHeader.Filename,
-					"saved_as":      uniqueFilename,
-					"path":          filePath,
-					"size":          len(data),
-					"type":          detectedType,
-					"uploaded_at":   time.Now().Format(time.RFC3339),
+					"field":       fieldName,
+					"filename":    safeName,
+					"saved_as":    uniqueFilename,
+					"path":        filePath,
+					"size":        len(data),
+					"type":        detectedType,
+					"uploaded_at": time.Now().Format(time.RFC3339),
 				})
 
-				// Log file upload
 				if auditLogger != nil {
 					auditLogger.Record(security.AuditEvent{
 						Type:      security.AuditEventPentestProbe,
@@ -660,7 +721,6 @@ func handleFileUpload(auditLogger security.AuditLogger) fiber.Handler {
 			}
 		}
 
-		// Extract form values
 		formValues := make(map[string][]string)
 		for key, values := range form.Value {
 			formValues[key] = values
@@ -680,16 +740,16 @@ func handleFileUpload(auditLogger security.AuditLogger) fiber.Handler {
 	}
 }
 
-func handleListFiles() fiber.Handler {
+func handleListFiles(policy uploadPolicy) fiber.Handler {
 	return func(c *fiber.Ctx) error {
-		uploadsDir := "uploads"
-		// Create directory if it doesn't exist
-		if err := os.MkdirAll(uploadsDir, 0755); err != nil {
+		if !policy.AllowListing {
+			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "File listing disabled"})
+		}
+		if err := os.MkdirAll(policy.Directory, 0755); err != nil {
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to access uploads directory"})
 		}
 
-		// Read directory contents
-		entries, err := os.ReadDir(uploadsDir)
+		entries, err := os.ReadDir(policy.Directory)
 		if err != nil {
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to read uploads directory"})
 		}
@@ -706,9 +766,9 @@ func handleListFiles() fiber.Handler {
 			}
 
 			files = append(files, fiber.Map{
-				"filename":    entry.Name(),
-				"size":        info.Size(),
-				"modified_at": info.ModTime().Format(time.RFC3339),
+				"filename":     entry.Name(),
+				"size":         info.Size(),
+				"modified_at":  info.ModTime().Format(time.RFC3339),
 				"download_url": fmt.Sprintf("/api/files/%s", entry.Name()),
 			})
 		}
@@ -718,26 +778,27 @@ func handleListFiles() fiber.Handler {
 			"success": true,
 			"message": "Files retrieved successfully",
 			"data": fiber.Map{
-				"files":        files,
-				"total":        len(files),
-				"directory":    uploadsDir,
+				"files":     files,
+				"total":     len(files),
+				"directory": policy.Directory,
 			},
 		})
 	}
 }
 
-func handleDownloadFile() fiber.Handler {
+func handleDownloadFile(policy uploadPolicy) fiber.Handler {
 	return func(c *fiber.Ctx) error {
+		if !policy.AllowDownloads {
+			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "File download disabled"})
+		}
 		filename := c.Params("filename")
 		if filename == "" {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Filename required"})
 		}
 
-		// Sanitize filename to prevent directory traversal
 		filename = filepath.Base(filename)
-		filePath := filepath.Join("uploads", filename)
+		filePath := filepath.Join(policy.Directory, filename)
 
-		// Check if file exists
 		info, err := os.Stat(filePath)
 		if err != nil {
 			if os.IsNotExist(err) {
@@ -750,7 +811,6 @@ func handleDownloadFile() fiber.Handler {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid file"})
 		}
 
-		// Read file
 		data, err := os.ReadFile(filePath)
 		if err != nil {
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to read file"})
@@ -950,7 +1010,7 @@ func handleLogon(cfg *config.ServerConfig, userAuth security.UserAuthenticator, 
 			userCtx.ID,
 			deviceID,
 			userCtx.Roles,
-			"", // fingerprint - could be extracted from request headers
+			currentFingerprint(c),
 		)
 		if err != nil {
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to generate tokens"})
