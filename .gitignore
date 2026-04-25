@@ -4,3 +4,4 @@
 node_modules
 .gocache
 .gomodcache
+examples/todo_password_server/.DS_Store

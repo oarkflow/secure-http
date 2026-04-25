@@ -2,9 +2,7 @@ package server
 
 import (
 	"bytes"
-	"crypto/hmac"
 	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -229,7 +227,7 @@ func New(opts Options) (*Server, error) {
 
 	if opts.EnableDemoRoutes && !cfg.IsStrictMode() {
 		app.Post("/login", handleLogon(cfg, userAuth, deviceRegistry, statelessAuth))
-		app.Post("/bootstrap", jwtMiddleware.Verify(), csrfMiddleware.Verify(), handleBootstrap(cfg))
+		app.Post("/bootstrap", jwtMiddleware.Verify(), csrfMiddleware.Verify(), handleBootstrap(deps))
 	}
 	if opts.RegisterPublicRoutes != nil {
 		opts.RegisterPublicRoutes(app, deps)
@@ -1086,86 +1084,23 @@ func handleLogon(cfg *config.ServerConfig, userAuth security.UserAuthenticator, 
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Failed to generate tokens"})
 		}
 
-		resp := fiber.Map{
-			"status":         200,
-			"success":        true,
-			"bootstrapPath":  "/bootstrap",
-			"handshakePath":  "/handshake",
-			"baseURL":        "",
-			"userID":         userCtx.ID,
-			"cookieAuth":     cfg.Auth.SessionCookie.Enabled,
-			"csrfCookieName": cfg.Auth.CSRF.CookieName,
-			"csrfHeaderName": cfg.Auth.CSRF.HeaderName,
-		}
-		if !cfg.Auth.SessionCookie.Enabled {
-			resp["accessToken"] = session.AccessToken
-			resp["refreshToken"] = session.RefreshToken
-			resp["csrfToken"] = session.CSRFToken
-		}
-		return c.JSON(resp)
+		return c.JSON(BuildBrowserLoginResponse(cfg, session, userCtx.ID, BrowserLoginResponseOptions{
+			BootstrapPath: "/bootstrap",
+			HandshakePath: "/handshake",
+		}))
 	}
 }
 
-func handleBootstrap(cfg *config.ServerConfig) fiber.Handler {
+func handleBootstrap(deps Dependencies) fiber.Handler {
 	return func(c *fiber.Ctx) error {
-		deviceID, _ := c.Locals("device_id").(string)
-		if deviceID == "" {
-			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "device not found"})
-		}
-
-		var matchedDevice *config.DeviceDefinition
-		for i := range cfg.Devices {
-			if cfg.Devices[i].ID == deviceID {
-				matchedDevice = &cfg.Devices[i]
-				break
-			}
-		}
-		gateSecrets := make([]fiber.Map, 0, len(cfg.Gate.Secrets))
-		for _, s := range cfg.Gate.Secrets {
-			gateSecrets = append(gateSecrets, fiber.Map{
-				"id":        s.ID,
-				"secret":    s.Material,
-				"notBefore": s.NotBefore,
-				"expiresAt": s.ExpiresAt,
-			})
-		}
-
-		var capabilityToken string
-		if len(cfg.Capabilities) > 0 {
-			capabilityToken = cfg.Capabilities[0].Token
-		}
-
-		return c.JSON(fiber.Map{
-			"baseURL":         "",
-			"deviceID":        deviceID,
-			"deviceSecret":    deviceSecretForBootstrap(deviceID, matchedDevice),
-			"handshakePath":   "/handshake",
-			"userToken":       bootstrapUserToken(c),
-			"capabilityToken": capabilityToken,
-			"gateSecrets":     gateSecrets,
+		payload, err := BuildBrowserBootstrap(c, deps, BrowserBootstrapOptions{
+			HandshakePath: "/handshake",
 		})
+		if err != nil {
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": err.Error()})
+		}
+		return c.JSON(payload)
 	}
-}
-
-func deriveDemoDeviceSecret(deviceID string) []byte {
-	h := hmac.New(sha256.New, []byte("demo-device-derivation-key"))
-	h.Write([]byte(deviceID))
-	return h.Sum(nil)
-}
-
-func deviceSecretForBootstrap(deviceID string, matched *config.DeviceDefinition) string {
-	if matched != nil && strings.TrimSpace(matched.Secret) != "" {
-		return matched.Secret
-	}
-	return "base64:" + base64.StdEncoding.EncodeToString(deriveDemoDeviceSecret(deviceID))
-}
-
-func bootstrapUserToken(c *fiber.Ctx) string {
-	claims, _ := c.Locals("token_claims").(*security.StatelessTokenClaims)
-	if claims == nil || len(claims.Metadata) == 0 {
-		return ""
-	}
-	return strings.TrimSpace(claims.Metadata["user_token"])
 }
 
 func IssueAuthSession(c *fiber.Ctx, deps Dependencies, userID, deviceID string, roles []string, metadata map[string]string) (*AuthSession, error) {

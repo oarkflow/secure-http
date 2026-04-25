@@ -20,6 +20,14 @@ srv, err := securehttp.NewServerFromFile("config/server.json", securehttp.Server
 log.Fatal(srv.Listen(""))
 ```
 
+For browser/WASM flows, the reusable contract now lives in `pkg/browser`. That package is framework-agnostic, so any Go server can return the same login/bootstrap JSON that the WASM bridge understands, even if it does not use Fiber.
+
+The split is:
+
+- `pkg/browser`: canonical browser login/bootstrap types plus pure Go builders
+- `pkg/http/server`: Fiber adapters that produce the same contract from the reusable secure server dependencies
+- `pkg/wasm/fetch`: consumes the shared `pkg/browser` bootstrap contract
+
 For clients, you can connect from config in one line:
 
 ```go
@@ -27,6 +35,13 @@ client, err := securehttp.ConnectClientFromFile("config/client.json")
 ```
 
 If you want to control the handshake yourself, use `securehttp.NewClientFromFile(...)` and call `Handshake()` when you are ready.
+
+If you are integrating with your own Go server instead of the built-in demo server, the browser flow is:
+
+1. Authenticate the user however your app wants.
+2. Return `browser.BuildLoginResponse(...)` or `securehttp.BuildBrowserLoginResponse(...)`.
+3. Expose a bootstrap route that returns `browser.BuildBootstrapConfig(...)` or `securehttp.BuildBrowserBootstrapConfig(...)`.
+4. Initialize the browser client/WASM bridge with the returned `bootstrapPath`.
 
 ## Server quickstart
 

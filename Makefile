@@ -1,4 +1,4 @@
-.PHONY: wasm wasm-go wasm-tinygo prepare-todo-web run-server run-todo-sample
+.PHONY: wasm wasm-go wasm-tinygo wasm-optimize patch-tinygo-wasm-exec prepare-todo-web run-server run-todo-sample
 
 # Known wasm_exec.js locations (ordered by priority)
 WASM_EXEC_PATHS := \
@@ -13,6 +13,8 @@ WASM_EXEC_PATHS := \
 WASM_EXEC := $(firstword $(wildcard $(WASM_EXEC_PATHS)))
 TINYGOROOT := $(shell tinygo env TINYGOROOT 2>/dev/null)
 TINYGOWASM_EXEC := $(TINYGOROOT)/targets/wasm_exec.js
+WASM_OPT := $(shell command -v wasm-opt 2>/dev/null)
+WASM_OPT_FLAGS := -Oz --enable-bulk-memory --enable-nontrapping-float-to-int
 
 run: wasm run-server
 
@@ -28,12 +30,14 @@ wasm-tinygo:
 		echo "ERROR: tinygo is not installed."; \
 		exit 1; \
 	fi
-	@if tinygo build -target wasm -opt=z -no-debug -scheduler=none -panic=trap -gc=leaking -o cmd/fullstack/client/fetch.wasm ./cmd/wasm; then \
+	@if tinygo build -target wasm -opt=z -no-debug -scheduler=asyncify -panic=trap -gc=leaking -o cmd/fullstack/client/fetch.wasm ./cmd/wasm; then \
+		$(MAKE) wasm-optimize; \
 		if [ ! -f "$(TINYGOWASM_EXEC)" ]; then \
 			echo "ERROR: TinyGo wasm_exec.js not found at $(TINYGOWASM_EXEC)"; \
 			exit 1; \
 		fi; \
 		cp "$(TINYGOWASM_EXEC)" cmd/fullstack/client/wasm_exec.js; \
+		$(MAKE) patch-tinygo-wasm-exec; \
 		echo "TinyGo WASM build complete:"; \
 		ls -lh cmd/fullstack/client/fetch.wasm; \
 	else \
@@ -43,7 +47,8 @@ wasm-tinygo:
 
 wasm-go:
 	@echo "TinyGo build unavailable; falling back to Go's wasm compiler."
-	GOOS=js GOARCH=wasm go build -trimpath -ldflags="-s -w" -o cmd/fullstack/client/fetch.wasm ./cmd/wasm
+	GOOS=js GOARCH=wasm go build -trimpath -buildvcs=false -ldflags="-s -w" -o cmd/fullstack/client/fetch.wasm ./cmd/wasm
+	@$(MAKE) wasm-optimize
 
 	@echo "Searching for wasm_exec.js..."
 	@if [ -z "$(WASM_EXEC)" ]; then \
@@ -62,6 +67,20 @@ wasm-go:
 
 	@echo "WASM build complete. Files in cmd/fullstack/client/"
 	@ls -lh cmd/fullstack/client/fetch.wasm
+
+wasm-optimize:
+	@if [ -n "$(WASM_OPT)" ]; then \
+		echo "Optimizing fetch.wasm with wasm-opt..."; \
+		"$(WASM_OPT)" $(WASM_OPT_FLAGS) cmd/fullstack/client/fetch.wasm -o cmd/fullstack/client/fetch.wasm.tmp; \
+		mv cmd/fullstack/client/fetch.wasm.tmp cmd/fullstack/client/fetch.wasm; \
+	else \
+		echo "wasm-opt not found; skipping post-link optimization."; \
+	fi
+
+patch-tinygo-wasm-exec:
+	@if ! grep -q '"runtime.getRandomData"' cmd/fullstack/client/wasm_exec.js; then \
+		perl -0pi -e 's/(gojs: \{\n)/$$1\t\t\t\t\t"runtime.getRandomData": (bufPtr, bufLen) => {\n\t\t\t\t\t\tcrypto.getRandomValues(loadSlice(bufPtr, bufLen));\n\t\t\t\t\t},\n/' cmd/fullstack/client/wasm_exec.js; \
+	fi
 
 prepare-todo-web: wasm
 	@echo "Staging todo sample frontend assets..."

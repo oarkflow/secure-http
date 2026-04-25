@@ -26,6 +26,7 @@ import (
 type account struct {
 	Username     string
 	UserID       string
+	Password     string
 	PasswordHash []byte
 	UserToken    string
 	Roles        []string
@@ -148,14 +149,53 @@ func registerAuthRoutes(app fiber.Router, deps httpserver.Dependencies, accounts
 
 	app.Post("/auth/login", func(c *fiber.Ctx) error {
 		var req struct {
-			Username string `json:"username"`
-			Password string `json:"password"`
+			Username   string `json:"username"`
+			UserID     string `json:"user_id"`
+			Login      string `json:"login"`
+			Identifier string `json:"identifier"`
+			Password   string `json:"password"`
+			UserToken  string `json:"user_token"`
 		}
 		if err := c.BodyParser(&req); err != nil {
 			return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": "invalid request"})
 		}
-		acc, ok := accounts[strings.ToLower(strings.TrimSpace(req.Username))]
-		if !ok || bcrypt.CompareHashAndPassword(acc.PasswordHash, []byte(req.Password)) != nil {
+
+		identifier := strings.ToLower(strings.TrimSpace(req.Username))
+		if identifier == "" {
+			identifier = strings.ToLower(strings.TrimSpace(req.UserID))
+		}
+		if identifier == "" {
+			identifier = strings.ToLower(strings.TrimSpace(req.Login))
+		}
+		if identifier == "" {
+			identifier = strings.ToLower(strings.TrimSpace(req.Identifier))
+		}
+		if identifier == "" {
+			return c.Status(http.StatusUnauthorized).JSON(fiber.Map{"error": "invalid credentials"})
+		}
+		password := req.Password
+		if strings.TrimSpace(password) == "" {
+			password = req.UserToken
+		}
+		password = strings.TrimSpace(password)
+		if password == "" {
+			return c.Status(http.StatusUnauthorized).JSON(fiber.Map{"error": "invalid credentials"})
+		}
+
+		acc, ok := accounts[identifier]
+		if !ok {
+			for _, candidate := range accounts {
+				if strings.EqualFold(candidate.UserID, identifier) {
+					acc = candidate
+					ok = true
+					break
+				}
+			}
+		}
+		passwordMatches := ok && (password == acc.Password ||
+			password == acc.UserToken ||
+			bcrypt.CompareHashAndPassword(acc.PasswordHash, []byte(password)) == nil)
+		if !passwordMatches {
 			return c.Status(http.StatusUnauthorized).JSON(fiber.Map{"error": "invalid credentials"})
 		}
 
@@ -173,54 +213,26 @@ func registerAuthRoutes(app fiber.Router, deps httpserver.Dependencies, accounts
 			return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "failed to issue auth session"})
 		}
 
-		resp := fiber.Map{
-			"success":        true,
-			"user_id":        acc.UserID,
-			"bootstrapPath":  "/auth/bootstrap",
-			"handshakePath":  "/handshake",
-			"baseURL":        "",
-			"cookieAuth":     deps.Config.Auth.SessionCookie.Enabled,
-			"csrfCookieName": deps.Config.Auth.CSRF.CookieName,
-			"csrfHeaderName": deps.Config.Auth.CSRF.HeaderName,
-		}
-		if !deps.Config.Auth.SessionCookie.Enabled {
-			resp["accessToken"] = session.AccessToken
-			resp["refreshToken"] = session.RefreshToken
-			resp["csrfToken"] = session.CSRFToken
-		}
-		return c.JSON(resp)
+		return c.JSON(httpserver.BuildBrowserLoginResponse(deps.Config, session, acc.UserID, httpserver.BrowserLoginResponseOptions{
+			BootstrapPath: "/auth/bootstrap",
+			HandshakePath: "/handshake",
+		}))
 	})
 
 	app.Post("/auth/bootstrap", jwt.Verify(), csrf.Verify(), func(c *fiber.Ctx) error {
-		claims, _ := c.Locals("token_claims").(*security.StatelessTokenClaims)
-		if claims == nil {
-			return c.Status(http.StatusUnauthorized).JSON(fiber.Map{"error": "auth claims missing"})
-		}
-		if err := deps.DeviceRegistry.Register(claims.DeviceID, deriveDeviceSecret(claims.DeviceID)); err != nil {
-			return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "failed to restore device"})
-		}
-		gateSecrets := make([]fiber.Map, 0, len(deps.Config.Gate.Secrets))
-		for _, s := range deps.Config.Gate.Secrets {
-			gateSecrets = append(gateSecrets, fiber.Map{
-				"id":        s.ID,
-				"secret":    s.Material,
-				"notBefore": s.NotBefore,
-				"expiresAt": s.ExpiresAt,
-			})
-		}
-		var capabilityToken string
-		if len(deps.Config.Capabilities) > 0 {
-			capabilityToken = deps.Config.Capabilities[0].Token
-		}
-		return c.JSON(fiber.Map{
-			"baseURL":         "",
-			"deviceID":        claims.DeviceID,
-			"deviceSecret":    "base64:" + base64.StdEncoding.EncodeToString(deriveDeviceSecret(claims.DeviceID)),
-			"handshakePath":   "/handshake",
-			"userToken":       claims.Metadata["user_token"],
-			"capabilityToken": capabilityToken,
-			"gateSecrets":     gateSecrets,
+		payload, err := httpserver.BuildBrowserBootstrap(c, deps, httpserver.BrowserBootstrapOptions{
+			HandshakePath: "/handshake",
+			RestoreDevice: func(c *fiber.Ctx, deps httpserver.Dependencies, deviceID string) error {
+				return deps.DeviceRegistry.Register(deviceID, deriveDeviceSecret(deviceID))
+			},
+			ResolveDeviceSecret: func(c *fiber.Ctx, deps httpserver.Dependencies, deviceID string) (string, error) {
+				return "base64:" + base64.StdEncoding.EncodeToString(deriveDeviceSecret(deviceID)), nil
+			},
 		})
+		if err != nil {
+			return c.Status(http.StatusUnauthorized).JSON(fiber.Map{"error": err.Error()})
+		}
+		return c.JSON(payload)
 	})
 
 	app.Post("/auth/logout", jwt.Verify(), csrf.Verify(), func(c *fiber.Ctx) error {
@@ -319,13 +331,16 @@ func seedAccounts() (map[string]account, error) {
 		if err != nil {
 			return nil, err
 		}
-		accounts[item.Username] = account{
+		acc := account{
 			Username:     item.Username,
 			UserID:       item.UserID,
+			Password:     item.Password,
 			PasswordHash: hash,
 			UserToken:    item.UserToken,
 			Roles:        item.Roles,
 		}
+		accounts[strings.ToLower(item.Username)] = acc
+		accounts[strings.ToLower(item.UserID)] = acc
 	}
 	return accounts, nil
 }

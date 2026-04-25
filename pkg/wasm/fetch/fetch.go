@@ -3,34 +3,48 @@
 package fetch
 
 import (
+	"bytes"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"net"
-	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall/js"
 	"time"
 
-	clientpkg "github.com/oarkflow/securehttp/pkg/http/client"
+	"github.com/oarkflow/securehttp/pkg/browser"
+	securecrypto "github.com/oarkflow/securehttp/pkg/crypto"
+)
+
+const (
+	methodGet    = "GET"
+	methodPost   = "POST"
+	methodPut    = "PUT"
+	methodDelete = "DELETE"
+	methodPatch  = "PATCH"
+
+	headerSessionID = "X-Session-ID"
+	headerUserToken = "X-User-Token"
 )
 
 type wasmState struct {
 	mu               sync.RWMutex
-	client           *clientpkg.SecureClient
+	client           *secureClient
 	handshakeRunning bool
 	waiters          []chan error
 }
 
 type wasmConfig struct {
-	cfg           clientpkg.Config
+	cfg           clientConfig
 	autoHandshake bool
 	accessToken   string
 	bootstrapPath string
@@ -58,7 +72,452 @@ var (
 	jsonGlobal     js.Value
 	promiseCtor    js.Value
 	errorCtor      js.Value
+	headersCtor    js.Value
+	fetchFuncJS    js.Value
 )
+
+type gateSecret struct {
+	ID        string
+	Secret    []byte
+	NotBefore time.Time
+	ExpiresAt time.Time
+}
+
+type gateClientConfig struct {
+	Secrets         []gateSecret
+	CapabilityToken string
+	NonceSize       int
+}
+
+type clientConfig struct {
+	BaseURL       string
+	DeviceID      string
+	DeviceSecret  []byte
+	UserToken     string
+	HandshakePath string
+	CSRFHeader    string
+	CSRFToken     string
+	Gate          gateClientConfig
+}
+
+type secureClient struct {
+	baseURL       string
+	handshakePath string
+	session       *clientSession
+	deviceID      string
+	deviceSecret  []byte
+	userToken     string
+	accessToken   string
+	csrfHeader    string
+	csrfToken     string
+	gateSecrets   []gateSecret
+	capability    string
+	nonceSize     int
+	rotateBefore  time.Duration
+	mu            sync.RWMutex
+}
+
+type clientSession struct {
+	SessionID string
+	EncKey    []byte
+	MacKey    []byte
+	ExpiresAt time.Time
+	mu        sync.Mutex
+}
+
+func newSecureClient(cfg clientConfig) (*secureClient, error) {
+	if cfg.BaseURL == "" {
+		return nil, errors.New("base URL is required")
+	}
+	if cfg.DeviceID == "" {
+		return nil, errors.New("device id is required")
+	}
+	if len(cfg.DeviceSecret) == 0 {
+		return nil, errors.New("device secret is required")
+	}
+	if len(cfg.Gate.Secrets) == 0 {
+		return nil, errors.New("gate secret is required")
+	}
+	if strings.TrimSpace(cfg.Gate.CapabilityToken) == "" {
+		return nil, errors.New("capability token is required")
+	}
+	handshakePath := normalizeEndpoint(firstNonEmpty(cfg.HandshakePath, "/handshake"))
+	secretCopy := make([]byte, len(cfg.DeviceSecret))
+	copy(secretCopy, cfg.DeviceSecret)
+	nonceSize := cfg.Gate.NonceSize
+	if nonceSize <= 0 {
+		nonceSize = 16
+	}
+	return &secureClient{
+		baseURL:       strings.TrimRight(cfg.BaseURL, "/"),
+		handshakePath: handshakePath,
+		deviceID:      cfg.DeviceID,
+		deviceSecret:  secretCopy,
+		userToken:     cfg.UserToken,
+		csrfHeader:    firstNonEmpty(strings.TrimSpace(cfg.CSRFHeader), "X-CSRF-Token"),
+		csrfToken:     strings.TrimSpace(cfg.CSRFToken),
+		gateSecrets:   cloneGateSecrets(cfg.Gate.Secrets),
+		capability:    strings.TrimSpace(cfg.Gate.CapabilityToken),
+		nonceSize:     nonceSize,
+		rotateBefore:  2 * time.Minute,
+	}, nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func cloneGateSecrets(src []gateSecret) []gateSecret {
+	if len(src) == 0 {
+		return nil
+	}
+	clones := make([]gateSecret, 0, len(src))
+	for _, s := range src {
+		if s.ID == "" || len(s.Secret) == 0 {
+			continue
+		}
+		secretCopy := make([]byte, len(s.Secret))
+		copy(secretCopy, s.Secret)
+		clones = append(clones, gateSecret{
+			ID:        s.ID,
+			Secret:    secretCopy,
+			NotBefore: s.NotBefore,
+			ExpiresAt: s.ExpiresAt,
+		})
+	}
+	return clones
+}
+
+func (c *secureClient) SetAccessToken(token string) {
+	c.mu.Lock()
+	c.accessToken = token
+	c.mu.Unlock()
+}
+
+func (c *secureClient) NeedsHandshake() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.session == nil || c.session.isExpired() || c.session.needsRotation(time.Now(), c.rotateBefore)
+}
+
+func (cs *clientSession) isExpired() bool {
+	return cs == nil || (!cs.ExpiresAt.IsZero() && time.Now().After(cs.ExpiresAt))
+}
+
+func (cs *clientSession) needsRotation(now time.Time, rotateBefore time.Duration) bool {
+	if cs == nil || cs.ExpiresAt.IsZero() || rotateBefore <= 0 {
+		return false
+	}
+	return !now.Before(cs.ExpiresAt.Add(-rotateBefore))
+}
+
+func (c *secureClient) Handshake() error {
+	privateKey, publicKey, err := securecrypto.GenerateKeyPair()
+	if err != nil {
+		return fmt.Errorf("generate handshake keypair: %w", err)
+	}
+
+	timestamp := time.Now().Unix()
+	payload := deviceAuthenticationPayload(publicKey.Bytes(), timestamp)
+	signature := securecrypto.ComputeHMAC(c.deviceSecret, payload)
+	req := securecrypto.HandshakeRequest{
+		ClientPublicKey: publicKey.Bytes(),
+		DeviceID:        c.deviceID,
+		DeviceSignature: signature,
+		UserToken:       c.userToken,
+		Timestamp:       timestamp,
+	}
+	reqBody, err := json.Marshal(req)
+	if err != nil {
+		return fmt.Errorf("failed to marshal request: %w", err)
+	}
+	headers := map[string]string{"Content-Type": "application/json"}
+	if err := c.applyGateHeaders(headers, methodPost, c.handshakePath); err != nil {
+		return err
+	}
+
+	body, status, err := browserFetch(methodPost, c.baseURL+c.handshakePath, headers, reqBody)
+	if err != nil {
+		return fmt.Errorf("handshake request failed: %w", err)
+	}
+	if status != 200 {
+		return fmt.Errorf("handshake failed with status %d: %s", status, string(body))
+	}
+	if len(body) == 0 {
+		return errors.New("handshake failed: server returned empty response")
+	}
+
+	var handshakeResp securecrypto.HandshakeResponse
+	if err := json.Unmarshal(body, &handshakeResp); err != nil {
+		preview := string(body)
+		if len(preview) > 100 {
+			preview = preview[:100] + "..."
+		}
+		return fmt.Errorf("failed to decode handshake response (body: %q): %w", preview, err)
+	}
+	if handshakeResp.DeviceID != "" && handshakeResp.DeviceID != c.deviceID {
+		return fmt.Errorf("device mismatch: expected %s got %s", c.deviceID, handshakeResp.DeviceID)
+	}
+	sharedSecret, err := securecrypto.PerformECDH(privateKey, handshakeResp.ServerPublicKey)
+	if err != nil {
+		return fmt.Errorf("ECDH failed: %w", err)
+	}
+	encKey, macKey, err := securecrypto.DeriveKeys(sharedSecret)
+	if err != nil {
+		return fmt.Errorf("key derivation failed: %w", err)
+	}
+	expiresAt := time.Unix(handshakeResp.ExpiresAt, 0)
+	if handshakeResp.ExpiresAt == 0 {
+		expiresAt = time.Now().Add(securecrypto.SessionTimeout)
+	}
+	c.mu.Lock()
+	c.session = &clientSession{
+		SessionID: string(handshakeResp.SessionID),
+		EncKey:    encKey,
+		MacKey:    macKey,
+		ExpiresAt: expiresAt,
+	}
+	c.mu.Unlock()
+	return nil
+}
+
+func deviceAuthenticationPayload(publicKey []byte, timestamp int64) []byte {
+	payload := make([]byte, 0, len(publicKey)+8)
+	payload = append(payload, publicKey...)
+	ts := make([]byte, 8)
+	binary.BigEndian.PutUint64(ts, uint64(timestamp))
+	payload = append(payload, ts...)
+	return payload
+}
+
+func (c *secureClient) Get(endpoint string) ([]byte, error) {
+	return c.Do(methodGet, endpoint, nil, "")
+}
+
+func (c *secureClient) Post(endpoint string, data []byte) ([]byte, error) {
+	return c.Do(methodPost, endpoint, data, "application/json")
+}
+
+func (c *secureClient) Put(endpoint string, data []byte) ([]byte, error) {
+	return c.Do(methodPut, endpoint, data, "application/json")
+}
+
+func (c *secureClient) Delete(endpoint string) ([]byte, error) {
+	return c.Do(methodDelete, endpoint, nil, "")
+}
+
+func (c *secureClient) Patch(endpoint string, data []byte) ([]byte, error) {
+	return c.Do(methodPatch, endpoint, data, "application/json")
+}
+
+func (c *secureClient) Do(method, endpoint string, data []byte, contentType string) ([]byte, error) {
+	c.mu.RLock()
+	session := c.session
+	userToken := c.userToken
+	csrfHeader := c.csrfHeader
+	csrfToken := c.csrfToken
+	accessToken := c.accessToken
+	c.mu.RUnlock()
+	if session == nil || session.isExpired() {
+		return nil, errors.New("session expired or missing, call Handshake")
+	}
+
+	headers := map[string]string{}
+	var body []byte
+	isSafeMethod := method == methodGet || method == methodDelete
+	if isSafeMethod && len(data) == 0 {
+		body = nil
+	} else {
+		encMsg, err := session.encrypt(data)
+		if err != nil {
+			return nil, fmt.Errorf("encryption failed: %w", err)
+		}
+		body, err = json.Marshal(encMsg)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal encrypted message: %w", err)
+		}
+		headers["Content-Type"] = "application/octet-stream"
+	}
+	headers[headerSessionID] = session.SessionID
+	if userToken != "" {
+		headers[headerUserToken] = userToken
+	}
+	if requiresCSRF(method) && csrfHeader != "" && csrfToken != "" {
+		headers[csrfHeader] = csrfToken
+	}
+	if accessToken != "" {
+		headers["Authorization"] = "Bearer " + accessToken
+	}
+	if err := c.applyGateHeaders(headers, method, endpoint); err != nil {
+		return nil, err
+	}
+
+	respBody, status, err := browserFetch(method, c.baseURL+endpoint, headers, body)
+	if err != nil {
+		return nil, fmt.Errorf("request failed: %w", err)
+	}
+	if status != 200 {
+		return nil, fmt.Errorf("request failed with status %d: %s", status, string(respBody))
+	}
+	var encResp securecrypto.EncryptedMessage
+	if err = json.Unmarshal(respBody, &encResp); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal encrypted response: %w", err)
+	}
+	decryptedResp, err := session.decrypt(&encResp)
+	if err != nil {
+		return nil, fmt.Errorf("decryption failed: %w", err)
+	}
+	return decryptedResp, nil
+}
+
+func (c *secureClient) UploadFile(endpoint string, fileData []byte, filename, fieldName string, formData map[string]string) ([]byte, error) {
+	if fieldName == "" {
+		fieldName = "file"
+	}
+	boundary := "securehttp-" + strconv.FormatInt(time.Now().UnixNano(), 36)
+	var buf bytes.Buffer
+	for key, val := range formData {
+		buf.WriteString("--" + boundary + "\r\n")
+		buf.WriteString(`Content-Disposition: form-data; name="` + escapeMultipartQuote(key) + "\"\r\n\r\n")
+		buf.WriteString(val + "\r\n")
+	}
+	buf.WriteString("--" + boundary + "\r\n")
+	buf.WriteString(`Content-Disposition: form-data; name="` + escapeMultipartQuote(fieldName) + `"; filename="` + escapeMultipartQuote(filename) + "\"\r\n")
+	buf.WriteString("Content-Type: application/octet-stream\r\n\r\n")
+	buf.Write(fileData)
+	buf.WriteString("\r\n--" + boundary + "--\r\n")
+	endpointWithContentType := endpoint
+	sep := "?"
+	if strings.Contains(endpointWithContentType, "?") {
+		sep = "&"
+	}
+	endpointWithContentType += sep + "_ct=multipart/form-data; boundary=" + boundary
+	return c.Do(methodPost, endpointWithContentType, buf.Bytes(), "application/octet-stream")
+}
+
+func escapeMultipartQuote(s string) string {
+	s = strings.ReplaceAll(s, "\\", "\\\\")
+	return strings.ReplaceAll(s, `"`, `\"`)
+}
+
+func (cs *clientSession) encrypt(plaintext []byte) (*securecrypto.EncryptedMessage, error) {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	session := &securecrypto.Session{EncKey: cs.EncKey, MacKey: cs.MacKey}
+	return session.Encrypt(plaintext)
+}
+
+func (cs *clientSession) decrypt(msg *securecrypto.EncryptedMessage) ([]byte, error) {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	session := &securecrypto.Session{EncKey: cs.EncKey, MacKey: cs.MacKey}
+	return session.Decrypt(msg)
+}
+
+func (c *secureClient) applyGateHeaders(headers map[string]string, method, endpoint string) error {
+	if c.capability == "" {
+		return errors.New("capability token missing")
+	}
+	secret, err := selectActiveGateSecret(c.gateSecrets, time.Now())
+	if err != nil {
+		return err
+	}
+	nonce, err := randomNonce(c.nonceSize)
+	if err != nil {
+		return fmt.Errorf("gate nonce: %w", err)
+	}
+	timestamp := strconv.FormatInt(time.Now().Unix(), 10)
+	path := canonicalPath(endpoint)
+	payload := gateCanonicalPayload(method, path, timestamp, nonce, c.capability)
+	mac := securecrypto.ComputeHMAC(secret.Secret, payload)
+
+	headers["X-Gate-Key"] = secret.ID
+	headers["X-Gate-Timestamp"] = timestamp
+	headers["X-Gate-Nonce"] = nonce
+	headers["X-Gate-Signature"] = base64.StdEncoding.EncodeToString(mac)
+	headers["X-Capability-Token"] = c.capability
+	return nil
+}
+
+func selectActiveGateSecret(secrets []gateSecret, now time.Time) (gateSecret, error) {
+	var selected gateSecret
+	found := false
+	for _, secret := range secrets {
+		if secret.ID == "" || len(secret.Secret) == 0 {
+			continue
+		}
+		if !secret.NotBefore.IsZero() && now.Before(secret.NotBefore) {
+			continue
+		}
+		if !secret.ExpiresAt.IsZero() && now.After(secret.ExpiresAt) {
+			continue
+		}
+		if !found || secret.NotBefore.After(selected.NotBefore) {
+			selected = secret
+			found = true
+		}
+	}
+	if !found {
+		return gateSecret{}, errors.New("no active gate secret available")
+	}
+	return selected, nil
+}
+
+func randomNonce(size int) (string, error) {
+	if size < 12 {
+		size = 12
+	}
+	buf := make([]byte, size)
+	if _, err := rand.Read(buf); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(buf), nil
+}
+
+func gateCanonicalPayload(method, path, timestamp, nonce, capability string) []byte {
+	return []byte(strings.ToUpper(method) + "\n" + path + "\n" + timestamp + "\n" + nonce + "\n" + capability)
+}
+
+func canonicalPath(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return "/"
+	}
+	if strings.HasPrefix(trimmed, "http://") || strings.HasPrefix(trimmed, "https://") {
+		if idx := strings.Index(trimmed, "://"); idx >= 0 {
+			rest := trimmed[idx+3:]
+			if slash := strings.Index(rest, "/"); slash >= 0 {
+				trimmed = rest[slash:]
+			} else {
+				trimmed = "/"
+			}
+		}
+	}
+	if idx := strings.Index(trimmed, "?"); idx >= 0 {
+		trimmed = trimmed[:idx]
+	}
+	if trimmed == "" {
+		return "/"
+	}
+	if !strings.HasPrefix(trimmed, "/") {
+		trimmed = "/" + trimmed
+	}
+	return trimmed
+}
+
+func requiresCSRF(method string) bool {
+	switch strings.ToUpper(strings.TrimSpace(method)) {
+	case methodGet:
+		return false
+	default:
+		return true
+	}
+}
 
 // Run bootstraps the WASM bindings and blocks forever.
 func Run() {
@@ -72,6 +531,8 @@ func (s *wasmState) registerCallbacks() {
 	jsonGlobal = global.Get("JSON")
 	promiseCtor = global.Get("Promise")
 	errorCtor = global.Get("Error")
+	headersCtor = global.Get("Headers")
+	fetchFuncJS = global.Get("fetch")
 
 	initFunc = js.FuncOf(s.init)
 	fetchFunc = js.FuncOf(s.fetch)
@@ -101,7 +562,7 @@ func (s *wasmState) init(this js.Value, args []js.Value) any {
 			return
 		}
 
-		secureClient, err := clientpkg.NewSecureClient(cfg.cfg)
+		secureClient, err := newSecureClient(cfg.cfg)
 		if err != nil {
 			rejectError(reject, err)
 			return
@@ -173,21 +634,21 @@ func (s *wasmState) fetch(this js.Value, args []js.Value) any {
 				rejectError(reject, err)
 				return
 			}
-			if len(payload) == 0 && (req.method == http.MethodPost || req.method == http.MethodPut || req.method == http.MethodPatch) {
+			if len(payload) == 0 && (req.method == methodPost || req.method == methodPut || req.method == methodPatch) {
 				payload = []byte("null")
 			}
 
 			// Use appropriate method
 			switch req.method {
-			case http.MethodGet:
+			case methodGet:
 				resp, err = s.client.Get(req.endpoint)
-			case http.MethodPost:
+			case methodPost:
 				resp, err = s.client.Post(req.endpoint, json.RawMessage(payload))
-			case http.MethodPut:
+			case methodPut:
 				resp, err = s.client.Put(req.endpoint, json.RawMessage(payload))
-			case http.MethodDelete:
+			case methodDelete:
 				resp, err = s.client.Delete(req.endpoint)
-			case http.MethodPatch:
+			case methodPatch:
 				resp, err = s.client.Patch(req.endpoint, json.RawMessage(payload))
 			default:
 				rejectError(reject, fmt.Errorf("unsupported method: %s", req.method))
@@ -197,15 +658,15 @@ func (s *wasmState) fetch(this js.Value, args []js.Value) any {
 			if err != nil && strings.Contains(strings.ToLower(err.Error()), "handshake") {
 				if handshakeErr := s.ensureSession(true); handshakeErr == nil {
 					switch req.method {
-					case http.MethodGet:
+					case methodGet:
 						resp, err = s.client.Get(req.endpoint)
-					case http.MethodPost:
+					case methodPost:
 						resp, err = s.client.Post(req.endpoint, json.RawMessage(payload))
-					case http.MethodPut:
+					case methodPut:
 						resp, err = s.client.Put(req.endpoint, json.RawMessage(payload))
-					case http.MethodDelete:
+					case methodDelete:
 						resp, err = s.client.Delete(req.endpoint)
-					case http.MethodPatch:
+					case methodPatch:
 						resp, err = s.client.Patch(req.endpoint, json.RawMessage(payload))
 					}
 				} else {
@@ -329,13 +790,6 @@ func parseConfig(val js.Value) (wasmConfig, error) {
 		cfg.cfg.HandshakePath = path
 	}
 
-	if timeoutVal := val.Get("timeoutMs"); timeoutVal.Type() == js.TypeNumber {
-		ms := timeoutVal.Int()
-		if ms > 0 {
-			cfg.cfg.HTTPClient = &http.Client{Timeout: time.Duration(ms) * time.Millisecond}
-		}
-	}
-
 	cfg.autoHandshake = true
 	if auto := val.Get("autoHandshake"); auto.Type() == js.TypeBoolean {
 		cfg.autoHandshake = auto.Bool()
@@ -350,57 +804,27 @@ func parseConfig(val js.Value) (wasmConfig, error) {
 	return cfg, nil
 }
 
-type bootstrapResponse struct {
-	BaseURL         string `json:"baseURL"`
-	DeviceID        string `json:"deviceID"`
-	DeviceSecret    string `json:"deviceSecret"`
-	UserToken       string `json:"userToken"`
-	HandshakePath   string `json:"handshakePath"`
-	CapabilityToken string `json:"capabilityToken"`
-	GateSecrets     []struct {
-		ID        string `json:"id"`
-		Secret    string `json:"secret"`
-		NotBefore string `json:"notBefore"`
-		ExpiresAt string `json:"expiresAt"`
-	} `json:"gateSecrets"`
-}
-
 func hydrateBootstrapConfig(cfg wasmConfig) (wasmConfig, error) {
 	if cfg.cfg.DeviceID != "" && len(cfg.cfg.DeviceSecret) > 0 && len(cfg.cfg.Gate.Secrets) > 0 && cfg.cfg.Gate.CapabilityToken != "" {
 		return cfg, nil
 	}
-	httpClient := cfg.cfg.HTTPClient
-	if httpClient == nil {
-		httpClient = &http.Client{Timeout: 15 * time.Second}
-	}
 	url := strings.TrimRight(cfg.cfg.BaseURL, "/") + normalizeEndpoint(cfg.bootstrapPath)
-	req, err := http.NewRequest(http.MethodPost, url, nil)
-	if err != nil {
-		return cfg, err
-	}
+	headers := map[string]string{"Accept": "application/json"}
 	if strings.TrimSpace(cfg.accessToken) != "" {
-		req.Header.Set("Authorization", "Bearer "+cfg.accessToken)
+		headers["Authorization"] = "Bearer " + cfg.accessToken
 	}
 	if cfg.cfg.CSRFHeader != "" && cfg.cfg.CSRFToken != "" {
-		req.Header.Set(cfg.cfg.CSRFHeader, cfg.cfg.CSRFToken)
+		headers[cfg.cfg.CSRFHeader] = cfg.cfg.CSRFToken
 	}
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := httpClient.Do(req)
+	body, status, err := browserFetch(methodPost, url, headers, nil)
 	if err != nil {
 		return cfg, fmt.Errorf("bootstrap request failed: %w", err)
 	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return cfg, fmt.Errorf("bootstrap read failed: %w", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return cfg, fmt.Errorf("bootstrap failed with status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	if status != 200 {
+		return cfg, fmt.Errorf("bootstrap failed with status %d: %s", status, strings.TrimSpace(string(body)))
 	}
 
-	var payload bootstrapResponse
+	var payload browser.BootstrapConfig
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return cfg, fmt.Errorf("bootstrap decode failed: %w", err)
 	}
@@ -460,13 +884,8 @@ func decodeStringSecret(raw string) ([]byte, error) {
 	return []byte(raw), nil
 }
 
-func decodeBootstrapGateSecrets(entries []struct {
-	ID        string `json:"id"`
-	Secret    string `json:"secret"`
-	NotBefore string `json:"notBefore"`
-	ExpiresAt string `json:"expiresAt"`
-}) ([]clientpkg.GateSecret, error) {
-	secrets := make([]clientpkg.GateSecret, 0, len(entries))
+func decodeBootstrapGateSecrets(entries []browser.GateSecret) ([]gateSecret, error) {
+	secrets := make([]gateSecret, 0, len(entries))
 	for _, entry := range entries {
 		id := strings.TrimSpace(entry.ID)
 		if id == "" {
@@ -490,7 +909,7 @@ func decodeBootstrapGateSecrets(entries []struct {
 				return nil, fmt.Errorf("gate secret %s expiresAt: %w", id, err)
 			}
 		}
-		secrets = append(secrets, clientpkg.GateSecret{
+		secrets = append(secrets, gateSecret{
 			ID:        id,
 			Secret:    secret,
 			NotBefore: notBefore,
@@ -520,7 +939,7 @@ func parseRequest(val js.Value) (wasmRequest, error) {
 
 	req.method = strings.ToUpper(str("method"))
 	if req.method == "" {
-		req.method = http.MethodPost
+		req.method = methodPost
 	}
 
 	// Check if this is a file upload
@@ -618,8 +1037,8 @@ func valueToBytes(val js.Value) ([]byte, error) {
 	return nil, fmt.Errorf("unsupported secret type: %s", val.Type().String())
 }
 
-func collectGateSecrets(val js.Value) ([]clientpkg.GateSecret, error) {
-	var secrets []clientpkg.GateSecret
+func collectGateSecrets(val js.Value) ([]gateSecret, error) {
+	var secrets []gateSecret
 	if arr := val.Get("gateSecrets"); arr.Truthy() {
 		length := arr.Length()
 		for i := 0; i < length; i++ {
@@ -644,14 +1063,14 @@ func collectGateSecrets(val js.Value) ([]clientpkg.GateSecret, error) {
 	return secrets, nil
 }
 
-func parseGateSecretEntry(entry js.Value) (clientpkg.GateSecret, error) {
+func parseGateSecretEntry(entry js.Value) (gateSecret, error) {
 	id := firstStringProp(entry, "id", "key", "name")
 	secretVal := entry.Get("secret")
 	if !secretVal.Truthy() {
 		secretVal = entry.Get("value")
 	}
 	if id == "" || !secretVal.Truthy() {
-		return clientpkg.GateSecret{}, errors.New("each gateSecret requires id and secret")
+		return gateSecret{}, errors.New("each gateSecret requires id and secret")
 	}
 	return buildGateSecret(
 		id,
@@ -661,17 +1080,17 @@ func parseGateSecretEntry(entry js.Value) (clientpkg.GateSecret, error) {
 	)
 }
 
-func parseSingleGateSecret(val js.Value) (clientpkg.GateSecret, error) {
+func parseSingleGateSecret(val js.Value) (gateSecret, error) {
 	id := firstStringProp(val, "gateSecretID", "gateSecretId", "gateKeyID", "gateKeyId")
 	secretVal := val.Get("gateSecret")
 	if id == "" && (!secretVal.Truthy()) {
-		return clientpkg.GateSecret{}, nil
+		return gateSecret{}, nil
 	}
 	if id == "" {
-		return clientpkg.GateSecret{}, errors.New("gateSecretID is required")
+		return gateSecret{}, errors.New("gateSecretID is required")
 	}
 	if !secretVal.Truthy() {
-		return clientpkg.GateSecret{}, errors.New("gateSecret value is required")
+		return gateSecret{}, errors.New("gateSecret value is required")
 	}
 	return buildGateSecret(id, secretVal, "", "")
 }
@@ -689,29 +1108,29 @@ func firstStringProp(val js.Value, keys ...string) string {
 	return ""
 }
 
-func buildGateSecret(id string, secretVal js.Value, notBeforeRaw string, expiresAtRaw string) (clientpkg.GateSecret, error) {
+func buildGateSecret(id string, secretVal js.Value, notBeforeRaw string, expiresAtRaw string) (gateSecret, error) {
 	secretBytes, err := valueToBytes(secretVal)
 	if err != nil {
-		return clientpkg.GateSecret{}, err
+		return gateSecret{}, err
 	}
 	if len(secretBytes) == 0 {
-		return clientpkg.GateSecret{}, errors.New("gateSecret cannot be empty")
+		return gateSecret{}, errors.New("gateSecret cannot be empty")
 	}
 	var notBefore time.Time
 	if strings.TrimSpace(notBeforeRaw) != "" {
 		notBefore, err = time.Parse(time.RFC3339, strings.TrimSpace(notBeforeRaw))
 		if err != nil {
-			return clientpkg.GateSecret{}, fmt.Errorf("invalid gateSecret notBefore: %w", err)
+			return gateSecret{}, fmt.Errorf("invalid gateSecret notBefore: %w", err)
 		}
 	}
 	var expiresAt time.Time
 	if strings.TrimSpace(expiresAtRaw) != "" {
 		expiresAt, err = time.Parse(time.RFC3339, strings.TrimSpace(expiresAtRaw))
 		if err != nil {
-			return clientpkg.GateSecret{}, fmt.Errorf("invalid gateSecret expiresAt: %w", err)
+			return gateSecret{}, fmt.Errorf("invalid gateSecret expiresAt: %w", err)
 		}
 	}
-	return clientpkg.GateSecret{
+	return gateSecret{
 		ID:        id,
 		Secret:    secretBytes,
 		NotBefore: notBefore,
@@ -842,6 +1261,71 @@ func rejectError(reject js.Value, err error) {
 		return
 	}
 	reject.Invoke(err.Error())
+}
+
+type promiseResult struct {
+	value js.Value
+	err   error
+}
+
+func browserFetch(method, url string, headers map[string]string, body []byte) ([]byte, int, error) {
+	if !fetchFuncJS.Truthy() {
+		return nil, 0, errors.New("fetch global is unavailable")
+	}
+	opts := js.Global().Get("Object").New()
+	opts.Set("method", method)
+	if len(headers) > 0 {
+		headerObj := headersCtor.New()
+		for key, value := range headers {
+			headerObj.Call("set", key, value)
+		}
+		opts.Set("headers", headerObj)
+	}
+	if body != nil {
+		out := uint8ArrayCtor.New(len(body))
+		js.CopyBytesToJS(out, body)
+		opts.Set("body", out)
+	}
+	resp, err := awaitPromise(fetchFuncJS.Invoke(url, opts))
+	if err != nil {
+		return nil, 0, err
+	}
+	status := resp.Get("status").Int()
+	arrayBuffer, err := awaitPromise(resp.Call("arrayBuffer"))
+	if err != nil {
+		return nil, status, err
+	}
+	uint8Array := uint8ArrayCtor.New(arrayBuffer)
+	data := make([]byte, uint8Array.Length())
+	js.CopyBytesToGo(data, uint8Array)
+	return data, status, nil
+}
+
+func awaitPromise(promise js.Value) (js.Value, error) {
+	ch := make(chan promiseResult, 1)
+	thenFunc := js.FuncOf(func(this js.Value, args []js.Value) any {
+		ch <- promiseResult{value: args[0]}
+		return nil
+	})
+	catchFunc := js.FuncOf(func(this js.Value, args []js.Value) any {
+		ch <- promiseResult{err: jsError(args[0])}
+		return nil
+	})
+	promise.Call("then", thenFunc).Call("catch", catchFunc)
+	result := <-ch
+	thenFunc.Release()
+	catchFunc.Release()
+	return result.value, result.err
+}
+
+func jsError(val js.Value) error {
+	if val.IsUndefined() || val.IsNull() {
+		return errors.New("javascript promise rejected")
+	}
+	if msg := val.Get("message"); msg.Type() == js.TypeString {
+		return errors.New(msg.String())
+	}
+	return errors.New(val.String())
 }
 
 // Stateless authentication mode:

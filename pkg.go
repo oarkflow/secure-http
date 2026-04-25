@@ -1,6 +1,8 @@
 package securehttp
 
 import (
+	"github.com/gofiber/fiber/v2"
+	"github.com/oarkflow/securehttp/pkg/browser"
 	"github.com/oarkflow/securehttp/pkg/config"
 	httpclient "github.com/oarkflow/securehttp/pkg/http/client"
 	httpserver "github.com/oarkflow/securehttp/pkg/http/server"
@@ -14,6 +16,14 @@ type GateSecret = httpclient.GateSecret
 type Server = httpserver.Server
 type ServerOptions = httpserver.Options
 type ServerDependencies = httpserver.Dependencies
+type AuthSession = httpserver.AuthSession
+type BrowserGateSecret = browser.GateSecret
+type BrowserLoginResponse = browser.LoginResponse
+type BrowserBootstrapConfig = browser.BootstrapConfig
+type BrowserLoginResponseOptions = browser.LoginResponseOptions
+type BrowserBootstrapOptions = browser.BootstrapOptions
+type FiberBrowserLoginResponseOptions = httpserver.BrowserLoginResponseOptions
+type FiberBrowserBootstrapOptions = httpserver.BrowserBootstrapOptions
 
 func NewClient(cfg ClientConfig) (*SecureClient, error) {
 	return httpclient.NewSecureClient(cfg)
@@ -56,4 +66,20 @@ func NewServerFromFile(path string, opts ...ServerOptions) (*Server, error) {
 		resolved = opts[0]
 	}
 	return httpserver.NewFromFile(path, resolved)
+}
+
+func BuildBrowserLoginResponse(opts BrowserLoginResponseOptions) BrowserLoginResponse {
+	return browser.BuildLoginResponse(opts)
+}
+
+func BuildBrowserBootstrapConfig(opts BrowserBootstrapOptions) (*BrowserBootstrapConfig, error) {
+	return browser.BuildBootstrapConfig(opts)
+}
+
+func BuildFiberBrowserLoginResponse(cfg *config.ServerConfig, session *AuthSession, userID string, opts FiberBrowserLoginResponseOptions) BrowserLoginResponse {
+	return httpserver.BuildBrowserLoginResponse(cfg, session, userID, opts)
+}
+
+func BuildFiberBrowserBootstrap(c *fiber.Ctx, deps ServerDependencies, opts FiberBrowserBootstrapOptions) (*BrowserBootstrapConfig, error) {
+	return httpserver.BuildBrowserBootstrap(c, deps, opts)
 }

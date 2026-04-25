@@ -203,6 +203,7 @@ async function login(event) {
         if (!response.ok) {
             throw new Error(payload.error || "login failed");
         }
+        const resolvedUser = payload.userID || payload.user_id || username;
 
         const config = {
             baseURL: payload.baseURL || window.location.origin,
@@ -214,9 +215,9 @@ async function login(event) {
             autoHandshake: true,
         };
         await state.client.init(config);
-        state.username = username;
+        state.username = resolvedUser;
         saveSession({
-            username,
+            username: resolvedUser,
             timestamp: Date.now(),
             config: {
                 baseURL: config.baseURL,
@@ -229,7 +230,7 @@ async function login(event) {
         });
         elements.password.value = "";
         setStatus("Connected", "ok");
-        log("Authenticated and initialized secure transport", { username });
+        log("Authenticated and initialized secure transport", { username: resolvedUser });
         syncView();
         await refreshTodos();
     } catch (error) {
