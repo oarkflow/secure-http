@@ -99,6 +99,7 @@ async function handleLogin(event) {
         // 1. Call /login to authenticate and get session config
         const loginResp = await fetch("/login", {
             method: "POST",
+            credentials: "same-origin",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
                 user_id: userID,
@@ -112,32 +113,19 @@ async function handleLogin(event) {
         }
 
         const config = await loginResp.json();
-        log("Received session configuration from server", {
-            deviceID: config.deviceID,
-            hasDeviceSecret: !!config.deviceSecret,
-            hasGateSecrets: !!config.gateSecrets,
-            hasAccessToken: !!config.accessToken,
-            hasRefreshToken: !!config.refreshToken
+        log("Received login result from server", {
+            cookieAuth: !!config.cookieAuth,
+            bootstrapPath: config.bootstrapPath || "/bootstrap",
         });
-
-        // Store JWT tokens in sessionStorage (cleared on tab close)
-        if (config.accessToken) {
-            sessionStorage.setItem('accessToken', config.accessToken);
-        }
-        if (config.refreshToken) {
-            sessionStorage.setItem('refreshToken', config.refreshToken);
-        }
 
         // 2. Configure and initialize the secure client
         const secureConfig = {
             baseURL: config.baseURL || window.location.origin,
-            deviceID: config.deviceID,
-            deviceSecret: config.deviceSecret,
-            userToken: config.userToken,
-            accessToken: config.accessToken, // JWT token
             handshakePath: config.handshakePath || "/handshake",
-            capabilityToken: config.capabilityToken,
-            gateSecrets: config.gateSecrets,
+            bootstrapPath: config.bootstrapPath || "/bootstrap",
+            csrfCookieName: config.csrfCookieName || "securehttp_csrf",
+            csrfHeaderName: config.csrfHeaderName || "X-CSRF-Token",
+            csrfToken: readCookie(config.csrfCookieName || "securehttp_csrf"),
             autoHandshake: true,
         };
 
@@ -191,13 +179,29 @@ function randomNonce() {
     return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+function readCookie(name) {
+    const needle = `${name}=`;
+    const cookies = document.cookie ? document.cookie.split("; ") : [];
+    for (const cookie of cookies) {
+        if (cookie.startsWith(needle)) {
+            return decodeURIComponent(cookie.slice(needle.length));
+        }
+    }
+    return "";
+}
+
 function saveLoginState(userID, sessionConfig) {
-    // Store session config for page refresh restoration
-    // JWT tokens are stored separately in sessionStorage
     const state = {
         userID: userID,
         timestamp: Date.now(),
-        config: sessionConfig, // Store full config for restoration
+        config: {
+            baseURL: sessionConfig.baseURL,
+            bootstrapPath: sessionConfig.bootstrapPath,
+            handshakePath: sessionConfig.handshakePath,
+            csrfCookieName: sessionConfig.csrfCookieName,
+            csrfHeaderName: sessionConfig.csrfHeaderName,
+            autoHandshake: sessionConfig.autoHandshake,
+        },
     };
     try {
         sessionStorage.setItem("securefetch_user", JSON.stringify(state));
@@ -209,8 +213,6 @@ function saveLoginState(userID, sessionConfig) {
 function clearLoginState() {
     try {
         sessionStorage.removeItem("securefetch_user");
-        sessionStorage.removeItem("accessToken");
-        sessionStorage.removeItem("refreshToken");
     } catch (err) {}
 }
 
@@ -219,9 +221,7 @@ async function restoreLoginState() {
     // Re-establishes encrypted channel with stored JWT token
     try {
         const stateJSON = sessionStorage.getItem("securefetch_user");
-        const accessToken = sessionStorage.getItem("accessToken");
-
-        if (!stateJSON || !accessToken) {
+        if (!stateJSON) {
             log("No active session - please login");
             return null;
         }
@@ -245,10 +245,9 @@ async function restoreLoginState() {
         log(`Restoring session for ${state.userID}...`);
         setStatus("Restoring session...", "idle");
 
-        // Restore session config with stored access token
         const restoreConfig = {
             ...state.config,
-            accessToken: accessToken, // Use stored JWT token
+            csrfToken: readCookie(state.config.csrfCookieName || "securehttp_csrf"),
             autoHandshake: true,
         };
 

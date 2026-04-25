@@ -7,11 +7,31 @@ This repository shows how to front-load every HTTP request with a pre-routing cr
 - A WASM bridge (`pkg/wasm/securefetch`) so browsers can call the same encrypted APIs through `secureFetch`.
 - Uniform, opaque error responses plus audit fan-out (console + file + optional webhook).
 
+## Reusable server
+
+The reusable API surface now lives in the root package, so another Go app can stand up the secure server in a couple of lines:
+
+```go
+srv, err := securehttp.NewServerFromFile("config/server.json", securehttp.ServerOptions{
+	RegisterAPIRoutes: func(api fiber.Router, deps securehttp.ServerDependencies) {
+		api.Post("/widgets", createWidget)
+	},
+})
+log.Fatal(srv.Listen(""))
+```
+
+For clients, you can connect from config in one line:
+
+```go
+client, err := securehttp.ConnectClientFromFile("config/client.json")
+```
+
+If you want to control the handshake yourself, use `securehttp.NewClientFromFile(...)` and call `Handshake()` when you are ready.
+
 ## Server quickstart
 
 ```bash
-# Start the API with the sample config
-SECURE_HTTP_CONFIG=config/server.json go run ./cmd/server
+SECURE_HTTP_CONFIG=config/server.json go run ./cmd/fullstack
 ```
 
 Key behaviors:

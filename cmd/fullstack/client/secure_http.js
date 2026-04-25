@@ -50,22 +50,20 @@ function normalizeLabConfig(labConfig) {
     normalized.deviceID = String(labConfig.deviceID || "").trim();
     normalized.capabilityToken = String(labConfig.capabilityToken || "").trim();
     normalized.handshakePath = String(labConfig.handshakePath || "/handshake").trim();
+    normalized.bootstrapPath = String(labConfig.bootstrapPath || "/bootstrap").trim();
+    normalized.csrfHeaderName = String(labConfig.csrfHeaderName || "X-CSRF-Token").trim();
+    normalized.csrfCookieName = String(labConfig.csrfCookieName || "securehttp_csrf").trim();
+    normalized.csrfToken = String(labConfig.csrfToken || "").trim();
     normalized.autoHandshake = labConfig.autoHandshake !== false;
     normalized.gateSecrets = normalizeGateSecrets(labConfig.gateSecrets);
+    normalized.accessToken = String(labConfig.accessToken || "").trim();
     if (!normalized.baseURL) {
         throw new Error("labConfig.baseURL is required");
     }
-    if (!normalized.deviceID) {
-        throw new Error("labConfig.deviceID is required");
-    }
-    if (!normalized.deviceSecret) {
-        throw new Error("labConfig.deviceSecret is required");
-    }
-    if (!normalized.capabilityToken) {
-        throw new Error("labConfig.capabilityToken is required");
-    }
-    if (normalized.gateSecrets.length === 0) {
-        throw new Error("labConfig.gateSecrets must include at least one active secret");
+    const hasDirectSecrets = Boolean(normalized.deviceID && normalized.deviceSecret && normalized.capabilityToken && normalized.gateSecrets.length > 0);
+    const hasBootstrapFlow = Boolean(normalized.bootstrapPath);
+    if (!hasDirectSecrets && !hasBootstrapFlow) {
+        throw new Error("labConfig requires direct secrets or bootstrapPath");
     }
     return normalized;
 }

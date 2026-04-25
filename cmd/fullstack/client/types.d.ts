@@ -10,12 +10,17 @@ export interface SecureClientConfig {
 
 export interface LabConfig {
     baseURL: string;
-    deviceID: string;
-    deviceSecret: Uint8Array | string;
+    deviceID?: string;
+    deviceSecret?: Uint8Array | string;
     userToken?: string;
     handshakePath?: string;
-    capabilityToken: string;
-    gateSecrets: GateSecret[];
+    bootstrapPath?: string;
+    accessToken?: string;
+    csrfToken?: string;
+    csrfHeaderName?: string;
+    csrfCookieName?: string;
+    capabilityToken?: string;
+    gateSecrets?: GateSecret[];
     autoHandshake?: boolean;
     timeoutMs?: number;
     gateNonceSize?: number;

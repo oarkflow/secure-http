@@ -3,6 +3,8 @@ package middleware
 import (
 	"encoding/json"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -80,5 +82,69 @@ func TestCryptoMiddlewareHandshakeAndEncryptedRequest(t *testing.T) {
 	}
 	if response.Echo == "" {
 		t.Fatalf("expected echoed response body")
+	}
+}
+
+func TestStatelessAuthMiddlewareAcceptsCookie(t *testing.T) {
+	auth, err := security.NewStatelessAuthenticator(security.StatelessAuthConfig{
+		SigningKey:         []byte("01234567890123456789012345678901"),
+		Issuer:             "issuer",
+		Audience:           "aud",
+		AccessTokenTTL:     time.Minute,
+		RefreshTokenTTL:    time.Hour,
+		Algorithm:          "HS512",
+		RequireFingerprint: false,
+	})
+	if err != nil {
+		t.Fatalf("NewStatelessAuthenticator() error = %v", err)
+	}
+
+	accessToken, _, err := auth.GenerateTokenPair("user-1", "device-1", []string{"admin"}, "")
+	if err != nil {
+		t.Fatalf("GenerateTokenPair() error = %v", err)
+	}
+
+	app := fiber.New()
+	sam := NewStatelessAuthMiddlewareWithConfig(auth, StatelessAuthConfig{CookieName: "securehttp_access"})
+	app.Get("/protected", sam.Verify(), func(c *fiber.Ctx) error {
+		return c.JSON(fiber.Map{"user_id": c.Locals("user_id")})
+	})
+
+	req := httptest.NewRequest("GET", "/protected", nil)
+	req.AddCookie(&http.Cookie{Name: "securehttp_access", Value: accessToken})
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("app.Test() error = %v", err)
+	}
+	if resp.StatusCode != fiber.StatusOK {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, fiber.StatusOK)
+	}
+}
+
+func TestCSRFMiddlewareRejectsCookieAuthWithoutHeader(t *testing.T) {
+	app := fiber.New()
+	csrf := NewCSRFMiddleware(CSRFConfig{
+		Enabled:    true,
+		CookieName: "securehttp_csrf",
+		HeaderName: "X-CSRF-Token",
+	})
+	app.Post("/protected", func(c *fiber.Ctx) error {
+		c.Locals("auth_source", "cookie")
+		c.Locals("token_claims", &security.StatelessTokenClaims{
+			Metadata: map[string]string{"csrf_token": "csrf-1"},
+		})
+		return c.Next()
+	}, csrf.Verify(), func(c *fiber.Ctx) error {
+		return c.SendStatus(fiber.StatusOK)
+	})
+
+	req := httptest.NewRequest("POST", "/protected", nil)
+	req.AddCookie(&http.Cookie{Name: "securehttp_csrf", Value: "csrf-1"})
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("app.Test() error = %v", err)
+	}
+	if resp.StatusCode != fiber.StatusForbidden {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, fiber.StatusForbidden)
 	}
 }

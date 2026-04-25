@@ -42,21 +42,21 @@ type StatelessTokenClaims struct {
 	Metadata    map[string]string `json:"metadata,omitempty"`
 
 	// Security
-	ClientFingerprint string `json:"client_fp"` // Browser fingerprint
+	ClientFingerprint string `json:"client_fp"`  // Browser fingerprint
 	TokenType         string `json:"token_type"` // "access" or "refresh"
 }
 
 // StatelessAuthConfig configures the stateless authentication system
 type StatelessAuthConfig struct {
-	SigningKey        []byte        // HMAC signing key or Ed25519 private key
-	VerifyingKey      []byte        // Ed25519 public key (optional, for Ed25519)
-	Issuer            string        // Token issuer identifier
-	Audience          string        // Expected audience
-	AccessTokenTTL    time.Duration // Access token lifetime
-	RefreshTokenTTL   time.Duration // Refresh token lifetime
-	Algorithm         string        // "HS256", "HS512", or "Ed25519"
-	AllowedOrigins    []string      // Allowed request origins
-	RequireFingerprint bool         // Require client fingerprint validation
+	SigningKey         []byte        // HMAC signing key or Ed25519 private key
+	VerifyingKey       []byte        // Ed25519 public key (optional, for Ed25519)
+	Issuer             string        // Token issuer identifier
+	Audience           string        // Expected audience
+	AccessTokenTTL     time.Duration // Access token lifetime
+	RefreshTokenTTL    time.Duration // Refresh token lifetime
+	Algorithm          string        // "HS256", "HS512", or "Ed25519"
+	AllowedOrigins     []string      // Allowed request origins
+	RequireFingerprint bool          // Require client fingerprint validation
 }
 
 // StatelessAuthenticator provides stateless JWT-based authentication
@@ -98,14 +98,29 @@ func NewStatelessAuthenticator(config StatelessAuthConfig) (*StatelessAuthentica
 	}
 
 	return &StatelessAuthenticator{
-		config: config,
+		config:     config,
 		revokedIDs: make(map[string]int64),
 	}, nil
 }
 
 // GenerateTokenPair creates both access and refresh tokens
 func (sa *StatelessAuthenticator) GenerateTokenPair(userID, deviceID string, roles []string, fingerprint string) (accessToken, refreshToken string, err error) {
+	return sa.GenerateTokenPairWithMetadata(userID, deviceID, roles, fingerprint, nil)
+}
+
+// GenerateTokenPairWithMetadata creates both access and refresh tokens and embeds custom metadata.
+func (sa *StatelessAuthenticator) GenerateTokenPairWithMetadata(userID, deviceID string, roles []string, fingerprint string, metadata map[string]string) (accessToken, refreshToken string, err error) {
 	now := time.Now()
+	cloneMetadata := func() map[string]string {
+		if len(metadata) == 0 {
+			return nil
+		}
+		copied := make(map[string]string, len(metadata))
+		for k, v := range metadata {
+			copied[k] = v
+		}
+		return copied
+	}
 
 	// Generate access token
 	accessClaims := StatelessTokenClaims{
@@ -119,6 +134,7 @@ func (sa *StatelessAuthenticator) GenerateTokenPair(userID, deviceID string, rol
 		UserID:            userID,
 		DeviceID:          deviceID,
 		Roles:             roles,
+		Metadata:          cloneMetadata(),
 		ClientFingerprint: fingerprint,
 		TokenType:         "access",
 	}
@@ -140,6 +156,7 @@ func (sa *StatelessAuthenticator) GenerateTokenPair(userID, deviceID string, rol
 		UserID:            userID,
 		DeviceID:          deviceID,
 		Roles:             roles,
+		Metadata:          cloneMetadata(),
 		ClientFingerprint: fingerprint,
 		TokenType:         "refresh",
 	}

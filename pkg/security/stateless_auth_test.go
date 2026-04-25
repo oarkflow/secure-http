@@ -50,3 +50,33 @@ func TestStatelessAuthenticatorLifecycle(t *testing.T) {
 		t.Fatalf("ValidateToken() after revoke error = %v, want %v", err, ErrTokenRevoked)
 	}
 }
+
+func TestGenerateTokenPairWithMetadata(t *testing.T) {
+	auth, err := NewStatelessAuthenticator(StatelessAuthConfig{
+		SigningKey:         []byte("01234567890123456789012345678901"),
+		Issuer:             "issuer",
+		Audience:           "aud",
+		AccessTokenTTL:     time.Minute,
+		RefreshTokenTTL:    time.Hour,
+		Algorithm:          "HS512",
+		RequireFingerprint: true,
+	})
+	if err != nil {
+		t.Fatalf("NewStatelessAuthenticator() error = %v", err)
+	}
+
+	accessToken, _, err := auth.GenerateTokenPairWithMetadata("user-1", "device-1", []string{"admin"}, "fp-1", map[string]string{
+		"user_token": "user-token-1",
+	})
+	if err != nil {
+		t.Fatalf("GenerateTokenPairWithMetadata() error = %v", err)
+	}
+
+	claims, err := auth.ValidateToken(accessToken, "access", "fp-1")
+	if err != nil {
+		t.Fatalf("ValidateToken() error = %v", err)
+	}
+	if claims.Metadata["user_token"] != "user-token-1" {
+		t.Fatalf("claims.Metadata[user_token] = %q", claims.Metadata["user_token"])
+	}
+}

@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"errors"
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
@@ -9,36 +10,37 @@ import (
 
 // StatelessAuthMiddleware provides stateless JWT authentication
 type StatelessAuthMiddleware struct {
-	auth *security.StatelessAuthenticator
+	auth       *security.StatelessAuthenticator
+	cookieName string
+}
+
+type StatelessAuthConfig struct {
+	CookieName string
 }
 
 // NewStatelessAuthMiddleware creates a new stateless auth middleware
 func NewStatelessAuthMiddleware(auth *security.StatelessAuthenticator) *StatelessAuthMiddleware {
+	return NewStatelessAuthMiddlewareWithConfig(auth, StatelessAuthConfig{})
+}
+
+func NewStatelessAuthMiddlewareWithConfig(auth *security.StatelessAuthenticator, cfg StatelessAuthConfig) *StatelessAuthMiddleware {
+	cookieName := strings.TrimSpace(cfg.CookieName)
+	if cookieName == "" {
+		cookieName = "securehttp_access"
+	}
 	return &StatelessAuthMiddleware{
-		auth: auth,
+		auth:       auth,
+		cookieName: cookieName,
 	}
 }
 
 // Verify validates the JWT token and injects claims into context
 func (sam *StatelessAuthMiddleware) Verify() fiber.Handler {
 	return func(c *fiber.Ctx) error {
-		// Extract token from Authorization header
-		authHeader := c.Get("Authorization")
-		if authHeader == "" {
-			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
-				"error": "missing authorization header",
-			})
+		token, source, err := sam.resolveToken(c)
+		if err != nil {
+			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": err.Error()})
 		}
-
-		// Extract Bearer token
-		parts := strings.SplitN(authHeader, " ", 2)
-		if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" {
-			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
-				"error": "invalid authorization format",
-			})
-		}
-
-		token := parts[1]
 
 		// Compute current fingerprint
 		fingerprint := security.ComputeSessionFingerprint(
@@ -60,6 +62,7 @@ func (sam *StatelessAuthMiddleware) Verify() fiber.Handler {
 		c.Locals("device_id", claims.DeviceID)
 		c.Locals("user_roles", claims.Roles)
 		c.Locals("token_id", claims.TokenID)
+		c.Locals("auth_source", source)
 
 		// Create user context for compatibility with existing middleware
 		userCtx := &security.UserContext{
@@ -71,6 +74,31 @@ func (sam *StatelessAuthMiddleware) Verify() fiber.Handler {
 
 		return c.Next()
 	}
+}
+
+func (sam *StatelessAuthMiddleware) resolveToken(c *fiber.Ctx) (string, string, error) {
+	if sam == nil || c == nil {
+		return "", "", fiber.ErrUnauthorized
+	}
+	authHeader := strings.TrimSpace(c.Get("Authorization"))
+	if authHeader != "" {
+		parts := strings.SplitN(authHeader, " ", 2)
+		if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" {
+			return "", "", errors.New("invalid authorization format")
+		}
+		token := strings.TrimSpace(parts[1])
+		if token == "" {
+			return "", "", errors.New("missing bearer token")
+		}
+		return token, "header", nil
+	}
+	cookieName := strings.TrimSpace(sam.cookieName)
+	if cookieName != "" {
+		if token := strings.TrimSpace(c.Cookies(cookieName)); token != "" {
+			return token, "cookie", nil
+		}
+	}
+	return "", "", errors.New("missing authorization token")
 }
 
 // RequireRole middleware checks if user has required role

@@ -1,4 +1,4 @@
-.PHONY: wasm run-server
+.PHONY: wasm wasm-go wasm-tinygo run-server run-todo-sample
 
 # Known wasm_exec.js locations (ordered by priority)
 WASM_EXEC_PATHS := \
@@ -11,12 +11,34 @@ WASM_EXEC_PATHS := \
 
 # Find first existing wasm_exec.js
 WASM_EXEC := $(firstword $(wildcard $(WASM_EXEC_PATHS)))
+TINYGOROOT := $(shell tinygo env TINYGOROOT 2>/dev/null)
+TINYGOWASM_EXEC := $(TINYGOROOT)/targets/wasm_exec.js
 
 run: wasm run-server
 
-# Build the fetch WASM module and copy runtime shim
+# Build the fetch WASM module and copy runtime shim.
+# Prefers TinyGo with aggressive size optimization, falls back to the Go compiler
+# when the local TinyGo/Go pairing is incompatible.
 wasm:
+	@$(MAKE) wasm-tinygo || $(MAKE) wasm-go
+
+wasm-tinygo:
 	@echo "Building fetch.wasm..."
+	@if ! command -v tinygo >/dev/null 2>&1; then \
+		echo "ERROR: tinygo is not installed."; \
+		exit 1; \
+	fi
+	tinygo build -target wasm -opt=z -no-debug -scheduler=none -panic=trap -gc=leaking -o cmd/fullstack/client/fetch.wasm ./cmd/wasm
+	@if [ ! -f "$(TINYGOWASM_EXEC)" ]; then \
+		echo "ERROR: TinyGo wasm_exec.js not found at $(TINYGOWASM_EXEC)"; \
+		exit 1; \
+	fi
+	cp "$(TINYGOWASM_EXEC)" cmd/fullstack/client/wasm_exec.js
+	@echo "TinyGo WASM build complete:"
+	@ls -lh cmd/fullstack/client/fetch.wasm
+
+wasm-go:
+	@echo "TinyGo build unavailable; falling back to Go's wasm compiler."
 	GOOS=js GOARCH=wasm go build -trimpath -ldflags="-s -w" -o cmd/fullstack/client/fetch.wasm ./cmd/wasm
 
 	@echo "Searching for wasm_exec.js..."
@@ -35,8 +57,13 @@ wasm:
 	cp "$(WASM_EXEC)" cmd/fullstack/client/
 
 	@echo "WASM build complete. Files in cmd/fullstack/client/"
+	@ls -lh cmd/fullstack/client/fetch.wasm
 
 # Run the secure HTTP server
 run-server:
 	@echo "Starting secure server on :8443..."
 	go run ./cmd/fullstack  -config config/server.json -web ./cmd/fullstack/client -static-prefix /lab -addr :8443
+
+run-todo-sample:
+	@echo "Starting username/password todo sample on :9443..."
+	go run ./examples/todo_password_server -config config/todo-server.json -addr :9443

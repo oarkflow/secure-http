@@ -48,3 +48,17 @@ func TestSelectActiveGateSecretReturnsErrorWhenNoneActive(t *testing.T) {
 		t.Fatalf("selectActiveGateSecret() expected error")
 	}
 }
+
+func TestNeedsHandshakeWhenSessionIsNearExpiry(t *testing.T) {
+	client := &SecureClient{
+		rotateBefore: 2 * time.Minute,
+		session: &ClientSession{
+			SessionID: "session-1",
+			ExpiresAt: time.Now().Add(90 * time.Second),
+		},
+	}
+
+	if !client.NeedsHandshake() {
+		t.Fatalf("NeedsHandshake() = false, want true for near-expiry session")
+	}
+}

@@ -2,7 +2,6 @@ package client
 
 import (
 	"bytes"
-	"crypto/ecdh"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
@@ -46,17 +45,18 @@ type SecureClient struct {
 	baseURL       string
 	handshakePath string
 	httpClient    *http.Client
-	privateKey    *ecdh.PrivateKey
-	publicKey     *ecdh.PublicKey
 	session       *ClientSession
 	deviceID      string
 	deviceSecret  []byte
 	userToken     string
 	accessToken   string // JWT access token
+	csrfHeader    string
+	csrfToken     string
 	gateHeaders   security.GateHeaders
 	gateSecrets   []GateSecret
 	capability    string
 	nonceSize     int
+	rotateBefore  time.Duration
 	mu            sync.RWMutex
 }
 
@@ -77,6 +77,9 @@ type Config struct {
 	UserToken     string
 	HTTPClient    *http.Client
 	HandshakePath string
+	RotateBefore  time.Duration
+	CSRFHeader    string
+	CSRFToken     string
 	Gate          GateClientConfig
 }
 
@@ -91,6 +94,12 @@ func (c *SecureClient) SetUserToken(token string) {
 func (c *SecureClient) SetAccessToken(token string) {
 	c.mu.Lock()
 	c.accessToken = token
+	c.mu.Unlock()
+}
+
+func (c *SecureClient) SetCSRF(token string) {
+	c.mu.Lock()
+	c.csrfToken = token
 	c.mu.Unlock()
 }
 
@@ -242,11 +251,19 @@ func (cs *ClientSession) isExpired() bool {
 	return !cs.ExpiresAt.IsZero() && time.Now().After(cs.ExpiresAt)
 }
 
+func (cs *ClientSession) needsRotation(now time.Time, rotateBefore time.Duration) bool {
+	if cs == nil || cs.ExpiresAt.IsZero() || rotateBefore <= 0 {
+		return false
+	}
+	return !now.Before(cs.ExpiresAt.Add(-rotateBefore))
+}
+
 func (c *SecureClient) needsHandshakeLocked() bool {
 	if c.session == nil {
 		return true
 	}
-	return c.session.isExpired()
+	now := time.Now()
+	return c.session.isExpired() || c.session.needsRotation(now, c.rotateBefore)
 }
 
 // NeedsHandshake reports whether the current session is missing or expired.
@@ -274,10 +291,6 @@ func NewSecureClient(cfg Config) (*SecureClient, error) {
 	if strings.TrimSpace(cfg.Gate.CapabilityToken) == "" {
 		return nil, fmt.Errorf("capability token is required")
 	}
-	privKey, pubKey, err := crypto.GenerateKeyPair()
-	if err != nil {
-		return nil, err
-	}
 	httpClient := cfg.HTTPClient
 	if httpClient == nil {
 		httpClient = &http.Client{Timeout: 30 * time.Second}
@@ -295,31 +308,50 @@ func NewSecureClient(cfg Config) (*SecureClient, error) {
 	if nonceSize <= 0 {
 		nonceSize = 16
 	}
+	rotateBefore := cfg.RotateBefore
+	if rotateBefore <= 0 {
+		rotateBefore = 2 * time.Minute
+	}
 	gateHeaders := cfg.Gate.Headers.WithDefaults()
 
 	return &SecureClient{
 		baseURL:       cfg.BaseURL,
 		handshakePath: handshakePath,
-		privateKey:    privKey,
-		publicKey:     pubKey,
 		httpClient:    httpClient,
 		deviceID:      cfg.DeviceID,
 		deviceSecret:  secretCopy,
 		userToken:     cfg.UserToken,
+		csrfHeader:    firstNonEmpty(strings.TrimSpace(cfg.CSRFHeader), "X-CSRF-Token"),
+		csrfToken:     strings.TrimSpace(cfg.CSRFToken),
 		gateHeaders:   gateHeaders,
 		gateSecrets:   gateSecrets,
 		capability:    strings.TrimSpace(cfg.Gate.CapabilityToken),
 		nonceSize:     nonceSize,
+		rotateBefore:  rotateBefore,
 	}, nil
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
 }
 
 // Handshake establishes a secure session with the server
 func (c *SecureClient) Handshake() error {
+	privateKey, publicKey, err := crypto.GenerateKeyPair()
+	if err != nil {
+		return fmt.Errorf("generate handshake keypair: %w", err)
+	}
+
 	timestamp := time.Now().Unix()
-	payload := security.DeviceAuthenticationPayload(c.publicKey.Bytes(), timestamp)
+	payload := security.DeviceAuthenticationPayload(publicKey.Bytes(), timestamp)
 	signature := crypto.ComputeHMAC(c.deviceSecret, payload)
 	req := crypto.HandshakeRequest{
-		ClientPublicKey: c.publicKey.Bytes(),
+		ClientPublicKey: publicKey.Bytes(),
 		DeviceID:        c.deviceID,
 		DeviceSignature: signature,
 		UserToken:       c.userToken,
@@ -377,7 +409,7 @@ func (c *SecureClient) Handshake() error {
 	}
 
 	// Perform ECDH to get shared secret
-	sharedSecret, err := crypto.PerformECDH(c.privateKey, handshakeResp.ServerPublicKey)
+	sharedSecret, err := crypto.PerformECDH(privateKey, handshakeResp.ServerPublicKey)
 	if err != nil {
 		return fmt.Errorf("ECDH failed: %w", err)
 	}
@@ -458,6 +490,8 @@ func (c *SecureClient) Do(method, endpoint string, data interface{}, contentType
 	c.mu.RLock()
 	session := c.session
 	userToken := c.userToken
+	csrfHeader := c.csrfHeader
+	csrfToken := c.csrfToken
 	c.mu.RUnlock()
 	if session == nil || session.isExpired() {
 		return nil, fmt.Errorf("session expired or missing, call Handshake")
@@ -517,6 +551,9 @@ func (c *SecureClient) Do(method, endpoint string, data interface{}, contentType
 	req.Header.Set(headerSessionID, session.SessionID)
 	if userToken != "" {
 		req.Header.Set(headerUserToken, userToken)
+	}
+	if requiresCSRFFromMethod(method) && csrfHeader != "" && csrfToken != "" {
+		req.Header.Set(csrfHeader, csrfToken)
 	}
 
 	// Add JWT Bearer token if available
@@ -582,6 +619,8 @@ func (c *SecureClient) UploadFile(endpoint string, fileData []byte, filename, fi
 	c.mu.RLock()
 	session := c.session
 	userToken := c.userToken
+	csrfHeader := c.csrfHeader
+	csrfToken := c.csrfToken
 	c.mu.RUnlock()
 	if session == nil || session.isExpired() {
 		return nil, fmt.Errorf("session expired or missing, call Handshake")
@@ -654,6 +693,9 @@ func (c *SecureClient) UploadFile(endpoint string, fileData []byte, filename, fi
 	if userToken != "" {
 		req.Header.Set(headerUserToken, userToken)
 	}
+	if csrfHeader != "" && csrfToken != "" {
+		req.Header.Set(csrfHeader, csrfToken)
+	}
 
 	// Add JWT Bearer token if available
 	c.mu.RLock()
@@ -697,6 +739,15 @@ func (c *SecureClient) UploadFile(endpoint string, fileData []byte, filename, fi
 	}
 
 	return plaintext, nil
+}
+
+func requiresCSRFFromMethod(method string) bool {
+	switch strings.ToUpper(strings.TrimSpace(method)) {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+		return false
+	default:
+		return true
+	}
 }
 
 // IsConnected checks if client has an active session

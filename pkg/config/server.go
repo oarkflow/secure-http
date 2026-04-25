@@ -29,9 +29,31 @@ type RuntimeConfig struct {
 
 // AuthConfig toggles user/device requirements.
 type AuthConfig struct {
-	RequireDevice bool   `json:"require_device"`
-	RequireUser   bool   `json:"require_user"`
-	JWTSigningKey string `json:"jwt_signing_key"`
+	RequireDevice bool                `json:"require_device"`
+	RequireUser   bool                `json:"require_user"`
+	JWTSigningKey string              `json:"jwt_signing_key"`
+	SessionCookie SessionCookieConfig `json:"session_cookie"`
+	CSRF          CSRFConfig          `json:"csrf"`
+}
+
+type SessionCookieConfig struct {
+	Enabled  bool   `json:"enabled"`
+	Name     string `json:"name"`
+	Path     string `json:"path"`
+	Domain   string `json:"domain"`
+	HTTPOnly bool   `json:"http_only"`
+	Secure   bool   `json:"secure"`
+	SameSite string `json:"same_site"`
+}
+
+type CSRFConfig struct {
+	Enabled    bool   `json:"enabled"`
+	CookieName string `json:"cookie_name"`
+	HeaderName string `json:"header_name"`
+	Path       string `json:"path"`
+	Domain     string `json:"domain"`
+	Secure     bool   `json:"secure"`
+	SameSite   string `json:"same_site"`
 }
 
 // GateConfig declares the pre-routing gate settings.
@@ -155,6 +177,38 @@ func (cfg *ServerConfig) normalize() {
 			"application/pdf",
 			"application/octet-stream",
 		}
+	}
+	if !cfg.Auth.SessionCookie.Enabled {
+		cfg.Auth.SessionCookie.Enabled = true
+	}
+	if strings.TrimSpace(cfg.Auth.SessionCookie.Name) == "" {
+		cfg.Auth.SessionCookie.Name = "securehttp_access"
+	}
+	if strings.TrimSpace(cfg.Auth.SessionCookie.Path) == "" {
+		cfg.Auth.SessionCookie.Path = "/"
+	}
+	if !cfg.Auth.SessionCookie.HTTPOnly {
+		cfg.Auth.SessionCookie.HTTPOnly = true
+	}
+	cfg.Auth.SessionCookie.SameSite = strings.ToLower(strings.TrimSpace(cfg.Auth.SessionCookie.SameSite))
+	if cfg.Auth.SessionCookie.SameSite == "" {
+		cfg.Auth.SessionCookie.SameSite = "lax"
+	}
+	if !cfg.Auth.CSRF.Enabled {
+		cfg.Auth.CSRF.Enabled = true
+	}
+	if strings.TrimSpace(cfg.Auth.CSRF.CookieName) == "" {
+		cfg.Auth.CSRF.CookieName = "securehttp_csrf"
+	}
+	if strings.TrimSpace(cfg.Auth.CSRF.HeaderName) == "" {
+		cfg.Auth.CSRF.HeaderName = "X-CSRF-Token"
+	}
+	if strings.TrimSpace(cfg.Auth.CSRF.Path) == "" {
+		cfg.Auth.CSRF.Path = "/"
+	}
+	cfg.Auth.CSRF.SameSite = strings.ToLower(strings.TrimSpace(cfg.Auth.CSRF.SameSite))
+	if cfg.Auth.CSRF.SameSite == "" {
+		cfg.Auth.CSRF.SameSite = "lax"
 	}
 }
 

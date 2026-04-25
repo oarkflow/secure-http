@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net"
 	"net/http"
@@ -32,6 +33,7 @@ type wasmConfig struct {
 	cfg           clientpkg.Config
 	autoHandshake bool
 	accessToken   string
+	bootstrapPath string
 }
 
 type wasmRequest struct {
@@ -89,6 +91,11 @@ func (s *wasmState) init(this js.Value, args []js.Value) any {
 			return
 		}
 		cfg, err := parseConfig(args[0])
+		if err != nil {
+			rejectError(reject, err)
+			return
+		}
+		cfg, err = hydrateBootstrapConfig(cfg)
 		if err != nil {
 			rejectError(reject, err)
 			return
@@ -270,33 +277,30 @@ func parseConfig(val js.Value) (wasmConfig, error) {
 		return cfg, errors.New("baseURL is required")
 	}
 
-	cfg.cfg.DeviceID = str("deviceID")
-	if cfg.cfg.DeviceID == "" {
-		return cfg, errors.New("deviceID is required")
+	cfg.bootstrapPath = str("bootstrapPath")
+	if cfg.bootstrapPath == "" {
+		cfg.bootstrapPath = "/bootstrap"
 	}
 
-	secretVal := val.Get("deviceSecret")
-	secret, err := valueToBytes(secretVal)
-	if err != nil {
-		return cfg, fmt.Errorf("deviceSecret: %w", err)
+	cfg.cfg.DeviceID = str("deviceID")
+
+	if secretVal := val.Get("deviceSecret"); !secretVal.IsUndefined() && !secretVal.IsNull() {
+		secret, err := valueToBytes(secretVal)
+		if err != nil {
+			return cfg, fmt.Errorf("deviceSecret: %w", err)
+		}
+		cfg.cfg.DeviceSecret = secret
 	}
-	cfg.cfg.DeviceSecret = secret
 
 	gateSecrets, err := collectGateSecrets(val)
 	if err != nil {
 		return cfg, err
-	}
-	if len(gateSecrets) == 0 {
-		return cfg, errors.New("gateSecret is required")
 	}
 	cfg.cfg.Gate.Secrets = gateSecrets
 
 	capability := str("capabilityToken")
 	if capability == "" {
 		capability = str("gateCapability")
-	}
-	if capability == "" {
-		return cfg, errors.New("capabilityToken is required")
 	}
 	cfg.cfg.Gate.CapabilityToken = capability
 
@@ -308,6 +312,12 @@ func parseConfig(val js.Value) (wasmConfig, error) {
 
 	if token := str("userToken"); token != "" {
 		cfg.cfg.UserToken = token
+	}
+	if csrfToken := str("csrfToken"); csrfToken != "" {
+		cfg.cfg.CSRFToken = csrfToken
+	}
+	if csrfHeader := str("csrfHeaderName"); csrfHeader != "" {
+		cfg.cfg.CSRFHeader = csrfHeader
 	}
 
 	// Store JWT access token to be set after client creation
@@ -331,7 +341,163 @@ func parseConfig(val js.Value) (wasmConfig, error) {
 		cfg.autoHandshake = auto.Bool()
 	}
 
+	hasDirectSecrets := cfg.cfg.DeviceID != "" && len(cfg.cfg.DeviceSecret) > 0 && len(cfg.cfg.Gate.Secrets) > 0 && cfg.cfg.Gate.CapabilityToken != ""
+	hasBootstrap := cfg.bootstrapPath != ""
+	if !hasDirectSecrets && !hasBootstrap {
+		return cfg, errors.New("either direct secure material or bootstrapPath is required")
+	}
+
 	return cfg, nil
+}
+
+type bootstrapResponse struct {
+	BaseURL         string `json:"baseURL"`
+	DeviceID        string `json:"deviceID"`
+	DeviceSecret    string `json:"deviceSecret"`
+	UserToken       string `json:"userToken"`
+	HandshakePath   string `json:"handshakePath"`
+	CapabilityToken string `json:"capabilityToken"`
+	GateSecrets     []struct {
+		ID        string `json:"id"`
+		Secret    string `json:"secret"`
+		NotBefore string `json:"notBefore"`
+		ExpiresAt string `json:"expiresAt"`
+	} `json:"gateSecrets"`
+}
+
+func hydrateBootstrapConfig(cfg wasmConfig) (wasmConfig, error) {
+	if cfg.cfg.DeviceID != "" && len(cfg.cfg.DeviceSecret) > 0 && len(cfg.cfg.Gate.Secrets) > 0 && cfg.cfg.Gate.CapabilityToken != "" {
+		return cfg, nil
+	}
+	httpClient := cfg.cfg.HTTPClient
+	if httpClient == nil {
+		httpClient = &http.Client{Timeout: 15 * time.Second}
+	}
+	url := strings.TrimRight(cfg.cfg.BaseURL, "/") + normalizeEndpoint(cfg.bootstrapPath)
+	req, err := http.NewRequest(http.MethodPost, url, nil)
+	if err != nil {
+		return cfg, err
+	}
+	if strings.TrimSpace(cfg.accessToken) != "" {
+		req.Header.Set("Authorization", "Bearer "+cfg.accessToken)
+	}
+	if cfg.cfg.CSRFHeader != "" && cfg.cfg.CSRFToken != "" {
+		req.Header.Set(cfg.cfg.CSRFHeader, cfg.cfg.CSRFToken)
+	}
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return cfg, fmt.Errorf("bootstrap request failed: %w", err)
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return cfg, fmt.Errorf("bootstrap read failed: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return cfg, fmt.Errorf("bootstrap failed with status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	var payload bootstrapResponse
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return cfg, fmt.Errorf("bootstrap decode failed: %w", err)
+	}
+	if strings.TrimSpace(payload.BaseURL) != "" {
+		cfg.cfg.BaseURL = strings.TrimSpace(payload.BaseURL)
+	}
+	if cfg.cfg.DeviceID == "" {
+		cfg.cfg.DeviceID = strings.TrimSpace(payload.DeviceID)
+	}
+	if len(cfg.cfg.DeviceSecret) == 0 {
+		secret, err := decodeStringSecret(payload.DeviceSecret)
+		if err != nil {
+			return cfg, fmt.Errorf("bootstrap deviceSecret: %w", err)
+		}
+		cfg.cfg.DeviceSecret = secret
+	}
+	if cfg.cfg.UserToken == "" && strings.TrimSpace(payload.UserToken) != "" {
+		cfg.cfg.UserToken = strings.TrimSpace(payload.UserToken)
+	}
+	if cfg.cfg.HandshakePath == "" && strings.TrimSpace(payload.HandshakePath) != "" {
+		cfg.cfg.HandshakePath = strings.TrimSpace(payload.HandshakePath)
+	}
+	if cfg.cfg.Gate.CapabilityToken == "" {
+		cfg.cfg.Gate.CapabilityToken = strings.TrimSpace(payload.CapabilityToken)
+	}
+	if len(cfg.cfg.Gate.Secrets) == 0 {
+		secrets, err := decodeBootstrapGateSecrets(payload.GateSecrets)
+		if err != nil {
+			return cfg, err
+		}
+		cfg.cfg.Gate.Secrets = secrets
+	}
+
+	if cfg.cfg.DeviceID == "" {
+		return cfg, errors.New("bootstrap deviceID is required")
+	}
+	if len(cfg.cfg.DeviceSecret) == 0 {
+		return cfg, errors.New("bootstrap deviceSecret is required")
+	}
+	if cfg.cfg.Gate.CapabilityToken == "" {
+		return cfg, errors.New("bootstrap capabilityToken is required")
+	}
+	if len(cfg.cfg.Gate.Secrets) == 0 {
+		return cfg, errors.New("bootstrap gateSecrets are required")
+	}
+	return cfg, nil
+}
+
+func decodeStringSecret(raw string) ([]byte, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, errors.New("secret is empty")
+	}
+	if strings.HasPrefix(raw, "base64:") {
+		return base64.StdEncoding.DecodeString(raw[7:])
+	}
+	return []byte(raw), nil
+}
+
+func decodeBootstrapGateSecrets(entries []struct {
+	ID        string `json:"id"`
+	Secret    string `json:"secret"`
+	NotBefore string `json:"notBefore"`
+	ExpiresAt string `json:"expiresAt"`
+}) ([]clientpkg.GateSecret, error) {
+	secrets := make([]clientpkg.GateSecret, 0, len(entries))
+	for _, entry := range entries {
+		id := strings.TrimSpace(entry.ID)
+		if id == "" {
+			continue
+		}
+		secret, err := decodeStringSecret(entry.Secret)
+		if err != nil {
+			return nil, fmt.Errorf("gate secret %s: %w", id, err)
+		}
+		var notBefore time.Time
+		if strings.TrimSpace(entry.NotBefore) != "" {
+			notBefore, err = time.Parse(time.RFC3339, strings.TrimSpace(entry.NotBefore))
+			if err != nil {
+				return nil, fmt.Errorf("gate secret %s notBefore: %w", id, err)
+			}
+		}
+		var expiresAt time.Time
+		if strings.TrimSpace(entry.ExpiresAt) != "" {
+			expiresAt, err = time.Parse(time.RFC3339, strings.TrimSpace(entry.ExpiresAt))
+			if err != nil {
+				return nil, fmt.Errorf("gate secret %s expiresAt: %w", id, err)
+			}
+		}
+		secrets = append(secrets, clientpkg.GateSecret{
+			ID:        id,
+			Secret:    secret,
+			NotBefore: notBefore,
+			ExpiresAt: expiresAt,
+		})
+	}
+	return secrets, nil
 }
 
 func parseRequest(val js.Value) (wasmRequest, error) {

@@ -83,14 +83,10 @@ test("SecureHttpClient rejects invalid lab config", async () => {
             new SecureHttpClient({
                 wasmUrl: "/fetch.wasm",
                 labConfig: {
-                    baseURL: "http://localhost:8443",
-                    deviceID: "device-1",
-                    deviceSecret: "secret",
-                    capabilityToken: "cap-root",
-                    gateSecrets: [],
+                    bootstrapPath: "/bootstrap",
                 },
             }),
-        /gateSecrets/
+        /baseURL/
     );
 });
 
@@ -185,4 +181,44 @@ test("SecureHttpClient accepts gate secrets without explicit activation windows"
 
     await client.init();
     assert.equal(client.isReady, true);
+});
+
+test("SecureHttpClient accepts bootstrap-only config without exposing transport secrets to JS", async () => {
+    class GoMock {
+        constructor() {
+            this.importObject = {};
+        }
+        async run() {}
+    }
+    const calls = [];
+    const bridge = {
+        async secureFetchInit(config) {
+            calls.push(config);
+        },
+        async secureFetch() { return { ok: true }; },
+        async secureFetchHandshake() {},
+        secureFetchReset() {},
+    };
+
+    const client = new SecureHttpClient({
+        wasmUrl: "/fetch.wasm",
+        windowRef: bridge,
+        GoClass: GoMock,
+        WebAssemblyRef: {
+            async instantiate() {
+                return { instance: {} };
+            },
+        },
+        fetchImpl: async () => createResponse(new Uint8Array([1, 2, 3])),
+        labConfig: {
+            baseURL: "http://localhost:8443",
+            bootstrapPath: "/bootstrap",
+            userToken: "user-token",
+        },
+    });
+
+    await client.init();
+    assert.equal(client.isReady, true);
+    assert.equal(calls[0].bootstrapPath, "/bootstrap");
+    assert.equal("deviceSecret" in calls[0], false);
 });
