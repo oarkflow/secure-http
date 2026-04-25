@@ -2,3 +2,5 @@
 *.fiber.gz
 .idea
 node_modules
+.gocache
+.gomodcache

@@ -94,6 +94,8 @@ func (s *todoStore) delete(userID, id string) bool {
 func main() {
 	configPath := flag.String("config", defaultConfigPath(), "Path to sample server config")
 	addr := flag.String("addr", "", "Override listen address")
+	webRoot := flag.String("web", "examples/todo_password_server/web", "Static asset directory for the todo frontend")
+	staticPrefix := flag.String("static-prefix", "/todo", "URL prefix that serves the todo frontend")
 	flag.Parse()
 
 	accounts, err := seedAccounts()
@@ -104,6 +106,9 @@ func main() {
 
 	srv, err := httpserver.NewFromFile(*configPath, httpserver.Options{
 		ListenAddr:         *addr,
+		WebRoot:            *webRoot,
+		StaticPrefix:       *staticPrefix,
+		EnableStatic:       true,
 		RequireAccessToken: true,
 		RegisterPublicRoutes: func(app fiber.Router, deps httpserver.Dependencies) {
 			registerAuthRoutes(app, deps, accounts)
@@ -117,8 +122,18 @@ func main() {
 	}
 	defer srv.Close()
 
-	log.Printf("Todo password sample listening on %s", *addr)
+	log.Printf("Todo password sample listening on %s (frontend at %s/)", serverAddr(*addr, srv), strings.TrimSuffix(*staticPrefix, "/"))
 	log.Fatal(srv.Listen(""))
+}
+
+func serverAddr(override string, srv *httpserver.Server) string {
+	if strings.TrimSpace(override) != "" {
+		return override
+	}
+	if srv == nil {
+		return ""
+	}
+	return srv.Dependencies().Config.ListenAddr
 }
 
 func registerAuthRoutes(app fiber.Router, deps httpserver.Dependencies, accounts map[string]account) {
@@ -180,6 +195,9 @@ func registerAuthRoutes(app fiber.Router, deps httpserver.Dependencies, accounts
 		claims, _ := c.Locals("token_claims").(*security.StatelessTokenClaims)
 		if claims == nil {
 			return c.Status(http.StatusUnauthorized).JSON(fiber.Map{"error": "auth claims missing"})
+		}
+		if err := deps.DeviceRegistry.Register(claims.DeviceID, deriveDeviceSecret(claims.DeviceID)); err != nil {
+			return c.Status(http.StatusInternalServerError).JSON(fiber.Map{"error": "failed to restore device"})
 		}
 		gateSecrets := make([]fiber.Map, 0, len(deps.Config.Gate.Secrets))
 		for _, s := range deps.Config.Gate.Secrets {

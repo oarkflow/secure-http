@@ -136,7 +136,7 @@ func (cm *CryptoMiddleware) Decrypt() fiber.Handler {
 
 		body := c.Body()
 		if len(body) == 0 {
-			if c.Method() == fiber.MethodGet || c.Method() == fiber.MethodHead {
+			if isSafeEmptyBodyMethod(c.Method()) {
 				attachContext(nil)
 				cm.logEvent(security.AuditEventDecryptSuccess, sessionID, session.Metadata[security.MetadataDeviceID], userCtx, "empty payload allowed for safe method", nil)
 				return c.Next()
@@ -166,6 +166,13 @@ func (cm *CryptoMiddleware) Decrypt() fiber.Handler {
 
 		return c.Next()
 	}
+}
+
+func isSafeEmptyBodyMethod(method string) bool {
+	return method == fiber.MethodGet ||
+		method == fiber.MethodHead ||
+		method == fiber.MethodOptions ||
+		method == fiber.MethodDelete
 }
 
 // Encrypt middleware encrypts outgoing responses
