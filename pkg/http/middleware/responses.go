@@ -9,3 +9,7 @@ func respondNotFound(c *fiber.Ctx) error {
 	c.Response().Reset()
 	return c.SendStatus(fiber.StatusNotFound)
 }
+
+func respondOpaqueAuthFailure(c *fiber.Ctx) error {
+	return respondNotFound(c)
+}

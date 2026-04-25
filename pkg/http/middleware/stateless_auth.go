@@ -39,7 +39,7 @@ func (sam *StatelessAuthMiddleware) Verify() fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		token, source, err := sam.resolveToken(c)
 		if err != nil {
-			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": err.Error()})
+			return respondOpaqueAuthFailure(c)
 		}
 
 		// Compute current fingerprint
@@ -51,9 +51,7 @@ func (sam *StatelessAuthMiddleware) Verify() fiber.Handler {
 		// Validate token
 		claims, err := sam.auth.ValidateToken(token, "access", fingerprint)
 		if err != nil {
-			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
-				"error": "invalid or expired token",
-			})
+			return respondOpaqueAuthFailure(c)
 		}
 
 		// Inject claims into context
@@ -106,9 +104,7 @@ func (sam *StatelessAuthMiddleware) RequireRole(requiredRoles ...string) fiber.H
 	return func(c *fiber.Ctx) error {
 		claims, ok := c.Locals("token_claims").(*security.StatelessTokenClaims)
 		if !ok || claims == nil {
-			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
-				"error": "authentication required",
-			})
+			return respondOpaqueAuthFailure(c)
 		}
 
 		// Check if user has any of the required roles
@@ -123,9 +119,7 @@ func (sam *StatelessAuthMiddleware) RequireRole(requiredRoles ...string) fiber.H
 			}
 		}
 
-		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
-			"error": "insufficient permissions",
-		})
+		return respondOpaqueAuthFailure(c)
 	}
 }
 
@@ -134,9 +128,7 @@ func (sam *StatelessAuthMiddleware) RequirePermission(requiredPerms ...string) f
 	return func(c *fiber.Ctx) error {
 		claims, ok := c.Locals("token_claims").(*security.StatelessTokenClaims)
 		if !ok || claims == nil {
-			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
-				"error": "authentication required",
-			})
+			return respondOpaqueAuthFailure(c)
 		}
 
 		// Check if user has any of the required permissions
@@ -151,8 +143,6 @@ func (sam *StatelessAuthMiddleware) RequirePermission(requiredPerms ...string) f
 			}
 		}
 
-		return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
-			"error": "insufficient permissions",
-		})
+		return respondOpaqueAuthFailure(c)
 	}
 }

@@ -1,4 +1,5 @@
 const DEFAULT_READY_TIMEOUT_MS = 4000;
+const TRUSTED_LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "::1"]);
 
 function isBrowserLikeObject(value) {
     return value !== null && typeof value === "object";
@@ -14,6 +15,19 @@ function normalizeMethod(method, fallback = "POST") {
 
 function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isPotentiallyTrustedOrigin(rawUrl) {
+    try {
+        const fallbackBase = globalThis.location?.href || "http://localhost";
+        const url = new URL(rawUrl, fallbackBase);
+        if (url.protocol === "https:") {
+            return true;
+        }
+        return url.protocol === "http:" && TRUSTED_LOCAL_HOSTS.has(url.hostname);
+    } catch (error) {
+        return false;
+    }
 }
 
 function readCookieValue(name, source) {
@@ -71,6 +85,9 @@ function normalizeLabConfig(labConfig) {
     normalized.accessToken = String(labConfig.accessToken || "").trim();
     if (!normalized.baseURL) {
         throw new Error("labConfig.baseURL is required");
+    }
+    if (!isPotentiallyTrustedOrigin(normalized.baseURL)) {
+        throw new Error("labConfig.baseURL must use HTTPS outside trusted local development hosts");
     }
     const hasDirectSecrets = Boolean(normalized.deviceID && normalized.deviceSecret && normalized.capabilityToken && normalized.gateSecrets.length > 0);
     const hasBootstrapFlow = Boolean(normalized.bootstrapPath);
@@ -211,6 +228,9 @@ export class SecureHttpClient {
     async bootstrap() {
         if (!this.wasmUrl) {
             throw new Error("wasmUrl is required");
+        }
+        if (!isPotentiallyTrustedOrigin(this.wasmUrl)) {
+            throw new Error("wasmUrl must use HTTPS outside trusted local development hosts");
         }
         if (typeof this.GoClass !== "function") {
             throw new Error("Go WASM loader not found. Ensure wasm_exec.js is loaded.");

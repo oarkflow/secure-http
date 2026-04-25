@@ -461,5 +461,5 @@ func defaultConfigPath() string {
 	if val := os.Getenv("SECURE_HTTP_TODO_CONFIG"); val != "" {
 		return val
 	}
-	return "config.json"
+	return "config.dev.json"
 }

@@ -1,10 +1,10 @@
-.PHONY: run run-server wasm wasm-go wasm-tinygo wasm-optimize patch-tinygo-wasm-exec
+.PHONY: run run-server run-server-prod wasm wasm-go wasm-tinygo wasm-optimize patch-tinygo-wasm-exec
 
 REACT_APP_DIR := examples/react-app
 REACT_APP_WASM_DIR := $(REACT_APP_DIR)/src/lib/client
 REACT_APP_WASM_ENTRY := ./$(REACT_APP_DIR)/wasm
 REACT_APP_SERVER_ENTRY := ./$(REACT_APP_DIR)
-TODO_SERVER_CONFIG := config.json
+TODO_SERVER_CONFIG := config.dev.json
 
 # Known wasm_exec.js locations (ordered by priority)
 WASM_EXEC_PATHS := \
@@ -91,3 +91,7 @@ patch-tinygo-wasm-exec:
 run-server:
 	@echo "Starting React demo backend on :9443..."
 	go run $(REACT_APP_SERVER_ENTRY) -config $(TODO_SERVER_CONFIG) -addr :9443
+
+run-server-prod:
+	@echo "Starting React demo backend with strict production config on :9443..."
+	go run $(REACT_APP_SERVER_ENTRY) -config config.production.json -addr :9443

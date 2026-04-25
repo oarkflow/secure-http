@@ -48,7 +48,7 @@ If you prefer the raw command, this is what it runs:
 
 ```bash
 go run ./examples/react-app \
-  -config config.json \
+  -config config.dev.json \
   -addr :9443
 ```
 
@@ -56,11 +56,13 @@ To serve the production React build from the same Go process:
 
 ```bash
 go run ./examples/react-app \
-  -config config.json \
+  -config config.production.json \
   -web ./examples/react-app/dist \
   -static-prefix / \
   -addr :9443
 ```
+
+Use `config.dev.json` for local HTTP development and `config.production.json` as the strict HTTPS deployment template.
 
 ## Run the Frontend
 

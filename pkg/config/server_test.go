@@ -42,6 +42,92 @@ func TestServerConfigValidateDemoModeAllowsPlaceholders(t *testing.T) {
 	}
 }
 
+func TestServerConfigValidateStrictModeRequiresSecureCookieSettings(t *testing.T) {
+	cfg := &ServerConfig{
+		Runtime: RuntimeConfig{Mode: "strict"},
+		Auth: AuthConfig{
+			RequireDevice: true,
+			RequireUser:   true,
+			JWTSigningKey: "replace-with-real-32-byte-signing-key",
+			SessionCookie: SessionCookieConfig{
+				Enabled:  true,
+				Name:     "securehttp_access",
+				Path:     "/",
+				HTTPOnly: true,
+				Secure:   false,
+				SameSite: "lax",
+			},
+			CSRF: CSRFConfig{
+				Enabled:    true,
+				CookieName: "securehttp_csrf",
+				HeaderName: "X-CSRF-Token",
+				Path:       "/",
+				Secure:     false,
+				SameSite:   "lax",
+			},
+		},
+		Gate: GateConfig{
+			StrictOrigin:   false,
+			AllowedOrigins: []string{"https://app.example.com"},
+			Secrets: []SecretDefinition{{
+				ID:       "2026-Q2",
+				Material: "base64:cHJvZHVjdGlvbi1nYXRlLXNlY3JldA==",
+			}},
+		},
+		Devices: []DeviceDefinition{{
+			ID:     "device-1",
+			Secret: "base64:ZGV2aWNlLXNlY3JldC0x",
+		}},
+	}
+	cfg.normalize()
+	if err := cfg.Validate(); err == nil {
+		t.Fatalf("Validate() expected strict-mode cookie/origin hardening error")
+	}
+}
+
+func TestServerConfigValidateStrictModeAcceptsSecureCookieSettings(t *testing.T) {
+	cfg := &ServerConfig{
+		Runtime: RuntimeConfig{Mode: "strict"},
+		Auth: AuthConfig{
+			RequireDevice: true,
+			RequireUser:   true,
+			JWTSigningKey: "replace-with-real-32-byte-signing-key",
+			SessionCookie: SessionCookieConfig{
+				Enabled:  true,
+				Name:     "securehttp_access",
+				Path:     "/",
+				HTTPOnly: true,
+				Secure:   true,
+				SameSite: "lax",
+			},
+			CSRF: CSRFConfig{
+				Enabled:    true,
+				CookieName: "securehttp_csrf",
+				HeaderName: "X-CSRF-Token",
+				Path:       "/",
+				Secure:     true,
+				SameSite:   "lax",
+			},
+		},
+		Gate: GateConfig{
+			StrictOrigin:   true,
+			AllowedOrigins: []string{"https://app.example.com"},
+			Secrets: []SecretDefinition{{
+				ID:       "2026-Q2",
+				Material: "base64:cHJvZHVjdGlvbi1nYXRlLXNlY3JldA==",
+			}},
+		},
+		Devices: []DeviceDefinition{{
+			ID:     "device-1",
+			Secret: "base64:ZGV2aWNlLXNlY3JldC0x",
+		}},
+	}
+	cfg.normalize()
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v", err)
+	}
+}
+
 func TestBuildAuditLoggerUsesDefaultFilePath(t *testing.T) {
 	tmpDir := t.TempDir()
 	wd, err := os.Getwd()
@@ -73,5 +159,15 @@ func TestBuildAuditLoggerUsesDefaultFilePath(t *testing.T) {
 	}
 	if info.Size() == 0 {
 		t.Fatalf("audit log file is empty")
+	}
+}
+
+func TestLoadProductionConfigTemplatePassesStrictValidation(t *testing.T) {
+	cfg, err := LoadServerConfig(filepath.Join("..", "..", "config.production.json"))
+	if err != nil {
+		t.Fatalf("LoadServerConfig() error = %v", err)
+	}
+	if !cfg.IsStrictMode() {
+		t.Fatalf("expected production config to run in strict mode")
 	}
 }

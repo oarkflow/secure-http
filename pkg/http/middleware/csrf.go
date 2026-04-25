@@ -48,19 +48,19 @@ func (cm *CSRFMiddleware) Verify() fiber.Handler {
 
 		claims, _ := c.Locals("token_claims").(*security.StatelessTokenClaims)
 		if claims == nil || len(claims.Metadata) == 0 {
-			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "csrf context missing"})
+			return respondOpaqueAuthFailure(c)
 		}
 		expected := strings.TrimSpace(claims.Metadata["csrf_token"])
 		if expected == "" {
-			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "csrf token missing"})
+			return respondOpaqueAuthFailure(c)
 		}
 		headerValue := strings.TrimSpace(c.Get(cm.headerName))
 		if headerValue == "" || subtle.ConstantTimeCompare([]byte(headerValue), []byte(expected)) != 1 {
-			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "invalid csrf token"})
+			return respondOpaqueAuthFailure(c)
 		}
 		cookieValue := strings.TrimSpace(c.Cookies(cm.cookieName))
 		if cookieValue == "" || subtle.ConstantTimeCompare([]byte(cookieValue), []byte(expected)) != 1 {
-			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "invalid csrf cookie"})
+			return respondOpaqueAuthFailure(c)
 		}
 		return c.Next()
 	}

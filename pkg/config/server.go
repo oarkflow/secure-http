@@ -241,6 +241,30 @@ func (cfg *ServerConfig) Validate() error {
 		if len(cfg.Gate.AllowedOrigins) == 0 {
 			return fmt.Errorf("strict mode requires at least one allowed origin")
 		}
+		if !cfg.Gate.StrictOrigin {
+			return fmt.Errorf("strict mode requires gate.strict_origin=true")
+		}
+		if !cfg.Auth.SessionCookie.Enabled {
+			return fmt.Errorf("strict mode requires auth.session_cookie.enabled=true")
+		}
+		if !cfg.Auth.SessionCookie.HTTPOnly {
+			return fmt.Errorf("strict mode requires auth.session_cookie.http_only=true")
+		}
+		if !cfg.Auth.SessionCookie.Secure {
+			return fmt.Errorf("strict mode requires auth.session_cookie.secure=true")
+		}
+		if !cfg.Auth.CSRF.Enabled {
+			return fmt.Errorf("strict mode requires auth.csrf.enabled=true")
+		}
+		if !cfg.Auth.CSRF.Secure {
+			return fmt.Errorf("strict mode requires auth.csrf.secure=true")
+		}
+		if strings.EqualFold(strings.TrimSpace(cfg.Auth.SessionCookie.SameSite), "none") && !cfg.Auth.SessionCookie.Secure {
+			return fmt.Errorf("auth.session_cookie.same_site=none requires auth.session_cookie.secure=true")
+		}
+		if strings.EqualFold(strings.TrimSpace(cfg.Auth.CSRF.SameSite), "none") && !cfg.Auth.CSRF.Secure {
+			return fmt.Errorf("auth.csrf.same_site=none requires auth.csrf.secure=true")
+		}
 	}
 	return nil
 }

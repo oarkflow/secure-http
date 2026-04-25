@@ -144,7 +144,37 @@ func TestCSRFMiddlewareRejectsCookieAuthWithoutHeader(t *testing.T) {
 	if err != nil {
 		t.Fatalf("app.Test() error = %v", err)
 	}
-	if resp.StatusCode != fiber.StatusForbidden {
-		t.Fatalf("status = %d, want %d", resp.StatusCode, fiber.StatusForbidden)
+	if resp.StatusCode != fiber.StatusNotFound {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, fiber.StatusNotFound)
+	}
+}
+
+func TestStatelessAuthMiddlewareRejectsMissingTokenWithOpaqueNotFound(t *testing.T) {
+	auth, err := security.NewStatelessAuthenticator(security.StatelessAuthConfig{
+		SigningKey:         []byte("01234567890123456789012345678901"),
+		Issuer:             "issuer",
+		Audience:           "aud",
+		AccessTokenTTL:     time.Minute,
+		RefreshTokenTTL:    time.Hour,
+		Algorithm:          "HS512",
+		RequireFingerprint: false,
+	})
+	if err != nil {
+		t.Fatalf("NewStatelessAuthenticator() error = %v", err)
+	}
+
+	app := fiber.New()
+	sam := NewStatelessAuthMiddleware(auth)
+	app.Get("/protected", sam.Verify(), func(c *fiber.Ctx) error {
+		return c.SendStatus(fiber.StatusOK)
+	})
+
+	req := httptest.NewRequest("GET", "/protected", nil)
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("app.Test() error = %v", err)
+	}
+	if resp.StatusCode != fiber.StatusNotFound {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, fiber.StatusNotFound)
 	}
 }

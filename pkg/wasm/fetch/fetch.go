@@ -97,6 +97,7 @@ type clientConfig struct {
 	HandshakePath string
 	CSRFHeader    string
 	CSRFToken     string
+	RequestTimeout time.Duration
 	Gate          gateClientConfig
 }
 
@@ -110,6 +111,7 @@ type secureClient struct {
 	accessToken   string
 	csrfHeader    string
 	csrfToken     string
+	requestTimeout time.Duration
 	gateSecrets   []gateSecret
 	capability    string
 	nonceSize     int
@@ -148,6 +150,10 @@ func newSecureClient(cfg clientConfig) (*secureClient, error) {
 	if nonceSize <= 0 {
 		nonceSize = 16
 	}
+	requestTimeout := cfg.RequestTimeout
+	if requestTimeout <= 0 {
+		requestTimeout = 30 * time.Second
+	}
 	return &secureClient{
 		baseURL:       strings.TrimRight(cfg.BaseURL, "/"),
 		handshakePath: handshakePath,
@@ -156,6 +162,7 @@ func newSecureClient(cfg clientConfig) (*secureClient, error) {
 		userToken:     cfg.UserToken,
 		csrfHeader:    firstNonEmpty(strings.TrimSpace(cfg.CSRFHeader), "X-CSRF-Token"),
 		csrfToken:     strings.TrimSpace(cfg.CSRFToken),
+		requestTimeout: requestTimeout,
 		gateSecrets:   cloneGateSecrets(cfg.Gate.Secrets),
 		capability:    strings.TrimSpace(cfg.Gate.CapabilityToken),
 		nonceSize:     nonceSize,
@@ -241,7 +248,7 @@ func (c *secureClient) Handshake() error {
 		return err
 	}
 
-	body, status, err := browserFetch(methodPost, c.baseURL+c.handshakePath, headers, reqBody)
+	body, status, err := browserFetch(methodPost, c.baseURL+c.handshakePath, headers, reqBody, c.requestTimeout)
 	if err != nil {
 		return fmt.Errorf("handshake request failed: %w", err)
 	}
@@ -322,6 +329,7 @@ func (c *secureClient) Do(method, endpoint string, data []byte, contentType stri
 	csrfHeader := c.csrfHeader
 	csrfToken := c.csrfToken
 	accessToken := c.accessToken
+	requestTimeout := c.requestTimeout
 	c.mu.RUnlock()
 	if session == nil || session.isExpired() {
 		return nil, errors.New("session expired or missing, call Handshake")
@@ -357,7 +365,7 @@ func (c *secureClient) Do(method, endpoint string, data []byte, contentType stri
 		return nil, err
 	}
 
-	respBody, status, err := browserFetch(method, c.baseURL+endpoint, headers, body)
+	respBody, status, err := browserFetch(method, c.baseURL+endpoint, headers, body, requestTimeout)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
@@ -789,6 +797,9 @@ func parseConfig(val js.Value) (wasmConfig, error) {
 	if path := str("handshakePath"); path != "" {
 		cfg.cfg.HandshakePath = path
 	}
+	if timeout := durationMillis(val, "timeoutMs", "requestTimeoutMs"); timeout > 0 {
+		cfg.cfg.RequestTimeout = timeout
+	}
 
 	cfg.autoHandshake = true
 	if auto := val.Get("autoHandshake"); auto.Type() == js.TypeBoolean {
@@ -816,7 +827,7 @@ func hydrateBootstrapConfig(cfg wasmConfig) (wasmConfig, error) {
 	if cfg.cfg.CSRFHeader != "" && cfg.cfg.CSRFToken != "" {
 		headers[cfg.cfg.CSRFHeader] = cfg.cfg.CSRFToken
 	}
-	body, status, err := browserFetch(methodPost, url, headers, nil)
+	body, status, err := browserFetch(methodPost, url, headers, nil, cfg.cfg.RequestTimeout)
 	if err != nil {
 		return cfg, fmt.Errorf("bootstrap request failed: %w", err)
 	}
@@ -1108,6 +1119,18 @@ func firstStringProp(val js.Value, keys ...string) string {
 	return ""
 }
 
+func durationMillis(val js.Value, keys ...string) time.Duration {
+	for _, key := range keys {
+		prop := val.Get(key)
+		if prop.Type() == js.TypeNumber {
+			if ms := prop.Int(); ms > 0 {
+				return time.Duration(ms) * time.Millisecond
+			}
+		}
+	}
+	return 0
+}
+
 func buildGateSecret(id string, secretVal js.Value, notBeforeRaw string, expiresAtRaw string) (gateSecret, error) {
 	secretBytes, err := valueToBytes(secretVal)
 	if err != nil {
@@ -1268,13 +1291,26 @@ type promiseResult struct {
 	err   error
 }
 
-func browserFetch(method, url string, headers map[string]string, body []byte) ([]byte, int, error) {
+func browserFetch(method, url string, headers map[string]string, body []byte, timeout time.Duration) ([]byte, int, error) {
 	if !fetchFuncJS.Truthy() {
 		return nil, 0, errors.New("fetch global is unavailable")
 	}
 	opts := js.Global().Get("Object").New()
 	opts.Set("method", method)
 	opts.Set("credentials", "include")
+	if timeout > 0 {
+		if abortCtor := js.Global().Get("AbortController"); abortCtor.Truthy() {
+			controller := abortCtor.New()
+			opts.Set("signal", controller.Get("signal"))
+			abortFunc := js.FuncOf(func(this js.Value, args []js.Value) any {
+				controller.Call("abort")
+				return nil
+			})
+			cancel := js.Global().Call("setTimeout", abortFunc, int(timeout/time.Millisecond))
+			defer js.Global().Call("clearTimeout", cancel)
+			defer abortFunc.Release()
+		}
+	}
 	if len(headers) > 0 {
 		headerObj := headersCtor.New()
 		for key, value := range headers {
