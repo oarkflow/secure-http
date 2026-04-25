@@ -1,8 +1,8 @@
 # React Secure HTTP Demo
 
-This app is a React frontend for the `examples/todo_password_server` Fiber backend.
-It uses the shared secure HTTP browser client from `cmd/fullstack/client`, restores
-cookie-backed auth sessions, and sends todo API requests through the WASM bridge.
+This example pairs a React frontend with the Fiber todo backend in the same `examples/react-app` directory.
+It includes its own local secure HTTP browser client under `src/lib/client`,
+restores cookie-backed auth sessions, and sends todo API requests through the WASM bridge.
 
 ## Ports
 
@@ -34,22 +34,31 @@ and `127.0.0.1`, otherwise cookie-based auth and CSRF reads can break.
 From the repo root:
 
 ```bash
-make run-todo-sample
+make run-server
 ```
 
-That target:
+That target starts the Fiber backend on port `9443`.
+If you need to refresh the bundled WASM bridge first, run:
 
-- builds `fetch.wasm`
-- stages the browser assets for the sample backend
-- starts the Fiber server on port `9443`
+```bash
+make wasm
+```
 
 If you prefer the raw command, this is what it runs:
 
 ```bash
-go run ./examples/todo_password_server \
-  -config config/todo-server.json \
-  -web ./examples/todo_password_server/web \
-  -static-prefix /todo \
+go run ./examples/react-app \
+  -config config.json \
+  -addr :9443
+```
+
+To serve the production React build from the same Go process:
+
+```bash
+go run ./examples/react-app \
+  -config config.json \
+  -web ./examples/react-app/dist \
+  -static-prefix / \
   -addr :9443
 ```
 

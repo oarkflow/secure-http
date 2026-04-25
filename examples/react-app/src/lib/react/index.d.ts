@@ -1,6 +1,6 @@
 import type * as React from "react";
-import type { SecureHttpClient, SecureClientConfig, FetchRequest, LabConfig } from "./types";
-import type { SecureSession, SessionStore } from "./session";
+import type { SecureHttpClient, SecureClientConfig, FetchRequest, LabConfig } from "../client/types";
+import type { SecureSession, SessionStore } from "../client/session";
 
 export function SecureHttpProvider(props: {
     children?: React.ReactNode;

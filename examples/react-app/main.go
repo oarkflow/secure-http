@@ -98,8 +98,8 @@ func (s *todoStore) delete(userID, id string) bool {
 func main() {
 	configPath := flag.String("config", defaultConfigPath(), "Path to sample server config")
 	addr := flag.String("addr", "", "Override listen address")
-	webRoot := flag.String("web", "examples/todo_password_server/web", "Static asset directory for the todo frontend")
-	staticPrefix := flag.String("static-prefix", "/todo", "URL prefix that serves the todo frontend")
+	webRoot := flag.String("web", "", "Static asset directory for the React frontend (optional)")
+	staticPrefix := flag.String("static-prefix", "/", "URL prefix that serves the React frontend")
 	flag.Parse()
 
 	accounts, err := seedAccounts()
@@ -112,7 +112,7 @@ func main() {
 		ListenAddr:         *addr,
 		WebRoot:            *webRoot,
 		StaticPrefix:       *staticPrefix,
-		EnableStatic:       true,
+		EnableStatic:       strings.TrimSpace(*webRoot) != "",
 		RequireAccessToken: true,
 		RegisterPublicRoutes: func(app fiber.Router, deps httpserver.Dependencies) {
 			registerAuthRoutes(app, deps, accounts)
@@ -126,8 +126,20 @@ func main() {
 	}
 	defer srv.Close()
 
-	log.Printf("Todo password sample listening on %s (frontend at %s/)", serverAddr(*addr, srv), strings.TrimSuffix(*staticPrefix, "/"))
+	if strings.TrimSpace(*webRoot) != "" {
+		log.Printf("Todo password sample listening on %s (frontend at %s)", serverAddr(*addr, srv), displayStaticPrefix(*staticPrefix))
+	} else {
+		log.Printf("Todo password sample listening on %s", serverAddr(*addr, srv))
+	}
 	log.Fatal(srv.Listen(""))
+}
+
+func displayStaticPrefix(prefix string) string {
+	prefix = strings.TrimSpace(prefix)
+	if prefix == "" || prefix == "/" {
+		return "/"
+	}
+	return strings.TrimSuffix(prefix, "/")
 }
 
 func serverAddr(override string, srv *httpserver.Server) string {
@@ -284,7 +296,7 @@ func registerAuthRoutes(app fiber.Router, deps httpserver.Dependencies, accounts
 	})
 }
 
-func registerTodoRoutes(api fiber.Router, deps httpserver.Dependencies, store *todoStore) {
+func registerTodoRoutes(api fiber.Router, _ httpserver.Dependencies, store *todoStore) {
 	api.Get("/todos", func(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{"items": store.list(currentUser(c))})
 	})
@@ -449,5 +461,5 @@ func defaultConfigPath() string {
 	if val := os.Getenv("SECURE_HTTP_TODO_CONFIG"); val != "" {
 		return val
 	}
-	return "config/todo-server.json"
+	return "config.json"
 }

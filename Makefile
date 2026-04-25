@@ -1,4 +1,10 @@
-.PHONY: wasm wasm-go wasm-tinygo wasm-optimize patch-tinygo-wasm-exec prepare-todo-web run-server run-todo-sample
+.PHONY: run run-server wasm wasm-go wasm-tinygo wasm-optimize patch-tinygo-wasm-exec
+
+REACT_APP_DIR := examples/react-app
+REACT_APP_WASM_DIR := $(REACT_APP_DIR)/src/lib/client
+REACT_APP_WASM_ENTRY := ./$(REACT_APP_DIR)/wasm
+REACT_APP_SERVER_ENTRY := ./$(REACT_APP_DIR)
+TODO_SERVER_CONFIG := config.json
 
 # Known wasm_exec.js locations (ordered by priority)
 WASM_EXEC_PATHS := \
@@ -30,16 +36,16 @@ wasm-tinygo:
 		echo "ERROR: tinygo is not installed."; \
 		exit 1; \
 	fi
-	@if tinygo build -target wasm -opt=z -no-debug -scheduler=asyncify -panic=trap -gc=leaking -o cmd/fullstack/client/fetch.wasm ./cmd/wasm; then \
+	@if tinygo build -target wasm -opt=z -no-debug -scheduler=asyncify -panic=trap -gc=leaking -o $(REACT_APP_WASM_DIR)/fetch.wasm $(REACT_APP_WASM_ENTRY); then \
 		$(MAKE) wasm-optimize; \
 		if [ ! -f "$(TINYGOWASM_EXEC)" ]; then \
 			echo "ERROR: TinyGo wasm_exec.js not found at $(TINYGOWASM_EXEC)"; \
 			exit 1; \
 		fi; \
-		cp "$(TINYGOWASM_EXEC)" cmd/fullstack/client/wasm_exec.js; \
+		cp "$(TINYGOWASM_EXEC)" $(REACT_APP_WASM_DIR)/wasm_exec.js; \
 		$(MAKE) patch-tinygo-wasm-exec; \
 		echo "TinyGo WASM build complete:"; \
-		ls -lh cmd/fullstack/client/fetch.wasm; \
+		ls -lh $(REACT_APP_WASM_DIR)/fetch.wasm; \
 	else \
 		echo "TinyGo build failed; falling back to Go's wasm compiler."; \
 		$(MAKE) wasm-go; \
@@ -47,7 +53,7 @@ wasm-tinygo:
 
 wasm-go:
 	@echo "TinyGo build unavailable; falling back to Go's wasm compiler."
-	GOOS=js GOARCH=wasm go build -trimpath -buildvcs=false -ldflags="-s -w" -o cmd/fullstack/client/fetch.wasm ./cmd/wasm
+	GOOS=js GOARCH=wasm go build -trimpath -buildvcs=false -ldflags="-s -w" -o $(REACT_APP_WASM_DIR)/fetch.wasm $(REACT_APP_WASM_ENTRY)
 	@$(MAKE) wasm-optimize
 
 	@echo "Searching for wasm_exec.js..."
@@ -58,42 +64,30 @@ wasm-go:
 		echo ""; \
 		echo "Fix:"; \
 		echo "  • Ensure Go is properly installed"; \
-		echo "  • Or manually copy wasm_exec.js into web/demo/"; \
+		echo "  • Or manually copy wasm_exec.js into $(REACT_APP_WASM_DIR)/"; \
 		exit 1; \
 	fi
 
 	@echo "Found wasm_exec.js at: $(WASM_EXEC)"
-	cp "$(WASM_EXEC)" cmd/fullstack/client/
+	cp "$(WASM_EXEC)" $(REACT_APP_WASM_DIR)/
 
-	@echo "WASM build complete. Files in cmd/fullstack/client/"
-	@ls -lh cmd/fullstack/client/fetch.wasm
+	@echo "WASM build complete. Files in $(REACT_APP_WASM_DIR)/"
+	@ls -lh $(REACT_APP_WASM_DIR)/fetch.wasm
 
 wasm-optimize:
 	@if [ -n "$(WASM_OPT)" ]; then \
 		echo "Optimizing fetch.wasm with wasm-opt..."; \
-		"$(WASM_OPT)" $(WASM_OPT_FLAGS) cmd/fullstack/client/fetch.wasm -o cmd/fullstack/client/fetch.wasm.tmp; \
-		mv cmd/fullstack/client/fetch.wasm.tmp cmd/fullstack/client/fetch.wasm; \
+		"$(WASM_OPT)" $(WASM_OPT_FLAGS) $(REACT_APP_WASM_DIR)/fetch.wasm -o $(REACT_APP_WASM_DIR)/fetch.wasm.tmp; \
+		mv $(REACT_APP_WASM_DIR)/fetch.wasm.tmp $(REACT_APP_WASM_DIR)/fetch.wasm; \
 	else \
 		echo "wasm-opt not found; skipping post-link optimization."; \
 	fi
 
 patch-tinygo-wasm-exec:
-	@if ! grep -q '"runtime.getRandomData"' cmd/fullstack/client/wasm_exec.js; then \
-		perl -0pi -e 's/(gojs: \{\n)/$$1\t\t\t\t\t"runtime.getRandomData": (bufPtr, bufLen) => {\n\t\t\t\t\t\tcrypto.getRandomValues(loadSlice(bufPtr, bufLen));\n\t\t\t\t\t},\n/' cmd/fullstack/client/wasm_exec.js; \
+	@if ! grep -q '"runtime.getRandomData"' $(REACT_APP_WASM_DIR)/wasm_exec.js; then \
+		perl -0pi -e 's/(gojs: \{\n)/$$1\t\t\t\t\t"runtime.getRandomData": (bufPtr, bufLen) => {\n\t\t\t\t\t\tcrypto.getRandomValues(loadSlice(bufPtr, bufLen));\n\t\t\t\t\t},\n/' $(REACT_APP_WASM_DIR)/wasm_exec.js; \
 	fi
 
-prepare-todo-web: wasm
-	@echo "Staging todo sample frontend assets..."
-	mkdir -p examples/todo_password_server/web
-	cp cmd/fullstack/client/fetch.wasm examples/todo_password_server/web/fetch.wasm
-	cp cmd/fullstack/client/wasm_exec.js examples/todo_password_server/web/wasm_exec.js
-	cp cmd/fullstack/client/secure_http.js examples/todo_password_server/web/secure_http.js
-
-# Run the secure HTTP server
 run-server:
-	@echo "Starting secure server on :8443..."
-	go run ./cmd/fullstack  -config config/server.json -web ./cmd/fullstack/client -static-prefix /lab -addr :8443
-
-run-todo-sample: prepare-todo-web
-	@echo "Starting username/password todo sample on :9443..."
-	go run ./examples/todo_password_server -config config/todo-server.json -web ./examples/todo_password_server/web -static-prefix /todo -addr :9443
+	@echo "Starting React demo backend on :9443..."
+	go run $(REACT_APP_SERVER_ENTRY) -config $(TODO_SERVER_CONFIG) -addr :9443

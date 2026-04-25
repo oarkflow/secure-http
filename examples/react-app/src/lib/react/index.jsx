@@ -6,14 +6,14 @@ import React, {
     useState,
 } from "react";
 
-import { createSecureHttpClient } from "./secure_http.js";
+import { createSecureHttpClient } from "../client/secure_http.js";
 import {
     createSessionStore,
     isSessionAuthError,
     loginWithCredentials,
     logoutSession,
     restoreSession,
-} from "./session.js";
+} from "../client/session.js";
 
 const SecureHttpContext = createContext(null);
 

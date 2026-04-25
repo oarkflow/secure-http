@@ -39,9 +39,9 @@
   padding: 48px;
   display: flex;
   align-items: flex-end;
-  background:
-    linear-gradient(180deg, rgba(28, 61, 58, 0.84), rgba(15, 33, 43, 0.94)),
-    url('./assets/hero.png') center/cover no-repeat;
+  background-position: center;
+  background-size: cover;
+  background-repeat: no-repeat;
 }
 
 .login-copy h1,

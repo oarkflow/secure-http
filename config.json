@@ -77,7 +77,7 @@
     }
   ],
   "alerts": {
-    "log_file": "logs/todo-audit.log",
+    "log_file": "storage/logs/todo-audit.log",
     "webhook_url": "",
     "min_interval": "5s",
     "include_events": []

@@ -275,7 +275,7 @@ func New(opts Options) (*Server, error) {
 	if opts.EnableStatic {
 		webRoot := opts.WebRoot
 		if strings.TrimSpace(webRoot) == "" {
-			webRoot = "web/demo"
+			webRoot = "dist"
 		}
 		if err := ensureStaticBundle(webRoot); err != nil {
 			return fail(fmt.Errorf("static assets: %w", err))

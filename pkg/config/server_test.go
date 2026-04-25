@@ -66,7 +66,7 @@ func TestBuildAuditLoggerUsesDefaultFilePath(t *testing.T) {
 	})
 	cleanup()
 
-	logPath := filepath.Join(tmpDir, "logs", "audit.log")
+	logPath := filepath.Join(tmpDir, "storage", "logs", "audit.log")
 	info, err := os.Stat(logPath)
 	if err != nil {
 		t.Fatalf("os.Stat(%q) error = %v", logPath, err)

@@ -46,7 +46,7 @@ If you are integrating with your own Go server instead of the built-in demo serv
 ## Server quickstart
 
 ```bash
-SECURE_HTTP_CONFIG=config/server.json go run ./cmd/fullstack
+SECURE_HTTP_TODO_CONFIG=config.json go run ./examples/react-app
 ```
 
 Key behaviors:
@@ -120,7 +120,7 @@ The client performs the following steps:
 | --- | --- | --- |
 | `Handshake error: Initialize the client first` | `secureFetch` or `PostJSON` called before the handshake completed. | Call `secureFetchInit`/`Handshake()` during startup and await the returned promise before issuing API calls. Enable `autoHandshake` in the WASM config for convenience. |
 | `404` on every encrypted call | Missing gate headers, wrong capability token, or session fingerprint mismatch. | Ensure the client applied the latest gate secret & capability token and that the call originates from the same IP/User-Agent tuple that created the session. |
-| Audit log empty | `alerts.log_file` not writable. | Update `config/server.json` with a path the server process can create (default `logs/audit.log`). |
+| Audit log empty | `alerts.log_file` not writable. | Update `config/server.json` with a path the server process can create (default `storage/logs/audit.log`). |
 
 ## Security highlights
 
@@ -132,33 +132,21 @@ The client performs the following steps:
 
 Customize the configs, drop in your own alert transports, and build on top of the hardened primitives instead of re-implementing crypto or auth plumbing.
 
-## Full-stack test lab
+## React Todo Example
 
-Need a single binary that serves the encrypted API **and** the WASM demo so you can test login flows, persisted sessions, or run a quick pentest drill from one origin? Use the `cmd/fullstack` entrypoint:
+The repo’s bundled browser example now lives under `examples/react-app`:
 
 ```bash
-# Build the WASM bridge one time so the static bundle is complete
-GOOS=js GOARCH=wasm go build -o web/securefetch-demo/securefetch.wasm ./cmd/securefetchwasm
-cp "$(go env GOROOT)/misc/wasm/wasm_exec.js" web/securefetch-demo/
-
-# Launch the integrated lab
-go run ./cmd/fullstack  -config config/server.json -web web/demo -static-prefix /lab -addr :8443
+make wasm
+go run ./examples/react-app -config config.json -addr :9443
 ```
 
-This binary reuses the exact same crypto middleware and gatekeeper configuration, but it also:
+If you want the Go server to host the production frontend build too, point it at `examples/react-app/dist`:
 
-- Hosts the static WASM demo beneath the prefix you pick (defaults to `/demo`), so browsers load `index.html`, `securefetch.wasm`, and `wasm_exec.js` over the same origin as the encrypted API.
-- Exposes additional secure endpoints for manual verification:
-  - `POST /api/login` — Confirms that the current session + user token are valid, returning the bound user/device metadata.
-  - `POST /api/session/state` — Shows session issuance time, expiry, and whether the fingerprint binding still matches the caller (proves persistence protections work).
-  - `POST /api/logout` — Explicitly invalidates the encrypted session, deletes it server-side, and emits a logout audit event.
-  - `POST /api/pentest/probe` — Accepts arbitrary JSON describing an attack vector and records it as an `pentest_probe` audit event so you can validate alert fan-out.
-- Provides a browser UI with a login form where users enter their `user_id` and `user_token` credentials. Upon submission:
-  1. The client sends credentials to `/login` (unauthenticated endpoint)
-  2. Server validates the credentials and returns session configuration (deviceID, deviceSecret, gateSecrets, capabilityToken)
-  3. Client initializes the WASM bridge with the returned configuration
-  4. Client performs the handshake automatically (`/handshake`)
-  5. Client calls `/api/login` (encrypted endpoint) to establish the application session
-  6. All subsequent protected API calls use the encrypted channel with proper session binding
-
-Static assets remain unauthenticated so you can load the UI, but every handshake and API call beneath `/api` still requires the pre-HTTP gate headers plus encrypted payloads. That makes it ideal for side-by-side “legit user vs. attacker” exercises or demos where you want to showcase the full secure channel without orchestrating multiple servers.
+```bash
+go run ./examples/react-app \
+  -config config.json \
+  -web ./examples/react-app/dist \
+  -static-prefix / \
+  -addr :9443
+```

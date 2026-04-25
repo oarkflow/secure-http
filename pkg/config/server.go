@@ -456,7 +456,7 @@ func (cfg *ServerConfig) BuildAuditLogger() (security.AuditLogger, func(), error
 	console := security.NewConsoleAuditLogger()
 	logPath := strings.TrimSpace(cfg.Alerts.LogFile)
 	if logPath == "" {
-		logPath = "logs/audit.log"
+		logPath = "storage/logs/audit.log"
 	}
 	fileLogger, err := security.NewAsyncFileAuditLogger(logPath)
 	if err != nil {
