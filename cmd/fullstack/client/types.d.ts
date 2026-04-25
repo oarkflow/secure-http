@@ -6,6 +6,7 @@ export interface SecureClientConfig {
     labConfig?: LabConfig;
     /** Optional base64 SHA-256 of the wasm module */
     expectedWasmSha256?: string;
+    wasmIntegrity?: string;
 }
 
 export interface LabConfig {
@@ -63,6 +64,12 @@ export class SecureHttpClient {
      * Performs a secure request using an explicit request envelope.
      */
     request(request: FetchRequest): Promise<any>;
+
+    get(endpoint: string, responseType?: string): Promise<any>;
+    post(endpoint: string, body?: any, responseType?: string): Promise<any>;
+    put(endpoint: string, body?: any, responseType?: string): Promise<any>;
+    patch(endpoint: string, body?: any, responseType?: string): Promise<any>;
+    delete(endpoint: string, responseType?: string): Promise<any>;
 
     /**
      * Forces a handshake with the server.

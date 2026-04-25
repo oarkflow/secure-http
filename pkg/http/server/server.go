@@ -186,6 +186,29 @@ func New(opts Options) (*Server, error) {
 	app.Use(recover.New())
 	app.Use(logger.New())
 	if allowOrigins := cfg.CORSAllowOrigins(); allowOrigins != "" {
+		allowedOriginSet := make(map[string]struct{}, len(cfg.Gate.AllowedOrigins))
+		for _, origin := range cfg.Gate.AllowedOrigins {
+			trimmed := strings.TrimSpace(origin)
+			if trimmed != "" {
+				allowedOriginSet[trimmed] = struct{}{}
+			}
+		}
+		app.Use(func(c *fiber.Ctx) error {
+			origin := strings.TrimSpace(c.Get("Origin"))
+			if origin != "" {
+				if _, ok := allowedOriginSet[origin]; ok {
+					c.Set("Access-Control-Allow-Origin", origin)
+					c.Set("Vary", "Origin")
+					c.Set("Access-Control-Allow-Credentials", "true")
+					c.Set("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,PATCH,OPTIONS")
+					c.Set("Access-Control-Allow-Headers", "Origin,Referer,Content-Type,Accept,Authorization,X-CSRF-Token,X-Gate-Time,X-Gate-Sign,X-Gate-Purpose,X-Gate-Seq,X-Gate-Key,X-Gate-Nonce,X-Gate-Timestamp,X-Gate-Signature,X-Capability-Token,X-Session-ID,X-User-Token,X-Original-Content-Type")
+				}
+			}
+			if c.Method() == fiber.MethodOptions {
+				return c.SendStatus(fiber.StatusNoContent)
+			}
+			return c.Next()
+		})
 		app.Use(cors.New(cors.Config{
 			AllowOrigins:     allowOrigins,
 			AllowMethods:     "GET,POST,PUT,DELETE,PATCH,OPTIONS",

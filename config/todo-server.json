@@ -30,6 +30,8 @@
     "max_clock_skew": "30s",
     "nonce_ttl": "2m",
     "allowed_origins": [
+      "http://localhost:5173",
+      "http://127.0.0.1:5173",
       "http://localhost:9443",
       "http://127.0.0.1:9443"
     ],

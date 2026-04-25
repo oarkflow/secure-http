@@ -282,6 +282,8 @@ export class SecureHttpClient {
             message.includes("request failed with status 404") ||
             message.includes("request failed with status 401") ||
             message.includes("request failed with status 403") ||
+            message.includes("missing authorization token") ||
+            message.includes("invalid token") ||
             message.includes("session not found") ||
             message.includes("fingerprint mismatch") ||
             message.includes("missing session");

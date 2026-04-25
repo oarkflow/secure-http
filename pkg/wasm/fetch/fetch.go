@@ -828,7 +828,7 @@ func hydrateBootstrapConfig(cfg wasmConfig) (wasmConfig, error) {
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return cfg, fmt.Errorf("bootstrap decode failed: %w", err)
 	}
-	if strings.TrimSpace(payload.BaseURL) != "" {
+	if cfg.cfg.BaseURL == "" && strings.TrimSpace(payload.BaseURL) != "" {
 		cfg.cfg.BaseURL = strings.TrimSpace(payload.BaseURL)
 	}
 	if cfg.cfg.DeviceID == "" {
@@ -1274,6 +1274,7 @@ func browserFetch(method, url string, headers map[string]string, body []byte) ([
 	}
 	opts := js.Global().Get("Object").New()
 	opts.Set("method", method)
+	opts.Set("credentials", "include")
 	if len(headers) > 0 {
 		headerObj := headersCtor.New()
 		for key, value := range headers {

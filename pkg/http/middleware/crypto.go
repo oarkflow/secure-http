@@ -4,12 +4,21 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/oarkflow/securehttp/pkg/crypto"
 	"github.com/oarkflow/securehttp/pkg/security"
 )
+
+var corsHeaderNames = []string{
+	fiber.HeaderAccessControlAllowOrigin,
+	fiber.HeaderAccessControlAllowCredentials,
+	fiber.HeaderAccessControlAllowMethods,
+	fiber.HeaderAccessControlAllowHeaders,
+	fiber.HeaderVary,
+}
 
 const (
 	MaxMessageSize = 10 * 1024 * 1024 // 10MB
@@ -202,6 +211,7 @@ func (cm *CryptoMiddleware) Encrypt() fiber.Handler {
 		// Encrypt response
 		encMsg, err := session.Encrypt(responseBody)
 		if err != nil {
+			restoreHeaders(c, snapshotHeaders(c, corsHeaderNames))
 			c.Response().Reset()
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 				"error": "Encryption failed",
@@ -211,6 +221,7 @@ func (cm *CryptoMiddleware) Encrypt() fiber.Handler {
 		// Marshal encrypted message
 		encryptedBody, err := json.Marshal(encMsg)
 		if err != nil {
+			restoreHeaders(c, snapshotHeaders(c, corsHeaderNames))
 			c.Response().Reset()
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 				"error": "Failed to marshal encrypted response",
@@ -218,9 +229,36 @@ func (cm *CryptoMiddleware) Encrypt() fiber.Handler {
 		}
 
 		// Replace response body with encrypted version
+		headers := snapshotHeaders(c, corsHeaderNames)
 		c.Response().Reset()
+		restoreHeaders(c, headers)
 		c.Set(fiber.HeaderContentType, "application/octet-stream")
 		return c.Send(encryptedBody)
+	}
+}
+
+func snapshotHeaders(c *fiber.Ctx, names []string) map[string]string {
+	if c == nil || len(names) == 0 {
+		return nil
+	}
+	headers := make(map[string]string, len(names))
+	for _, name := range names {
+		if value := c.GetRespHeader(name); value != "" {
+			headers[name] = strings.Clone(value)
+		}
+	}
+	if len(headers) == 0 {
+		return nil
+	}
+	return headers
+}
+
+func restoreHeaders(c *fiber.Ctx, headers map[string]string) {
+	if c == nil || len(headers) == 0 {
+		return
+	}
+	for name, value := range headers {
+		c.Set(name, value)
 	}
 }
 

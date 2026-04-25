@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"sort"
@@ -33,12 +34,14 @@ type account struct {
 }
 
 type todo struct {
-	ID          string    `json:"id"`
-	Title       string    `json:"title"`
-	Description string    `json:"description"`
-	Done        bool      `json:"done"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID               string    `json:"id"`
+	Title            string    `json:"title"`
+	Description      string    `json:"description"`
+	Done             bool      `json:"done"`
+	ImageDataURL     string    `json:"image_data_url,omitempty"`
+	ImageContentType string    `json:"image_content_type,omitempty"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
 }
 
 type todoStore struct {
@@ -137,6 +140,44 @@ func serverAddr(override string, srv *httpserver.Server) string {
 	return srv.Dependencies().Config.ListenAddr
 }
 
+func browserBaseURL(c *fiber.Ctx, listenAddr string) string {
+	if c != nil {
+		if forwardedProto := strings.TrimSpace(c.Get("X-Forwarded-Proto")); forwardedProto != "" {
+			if forwardedHost := strings.TrimSpace(c.Get("X-Forwarded-Host")); forwardedHost != "" {
+				return forwardedProto + "://" + forwardedHost
+			}
+		}
+	}
+
+	listenAddr = strings.TrimSpace(listenAddr)
+	if listenAddr == "" {
+		if c != nil {
+			return c.BaseURL()
+		}
+		return ""
+	}
+	if strings.Contains(listenAddr, "://") {
+		return listenAddr
+	}
+
+	host, port, err := net.SplitHostPort(listenAddr)
+	if err != nil {
+		host = listenAddr
+		port = ""
+	}
+
+	host = strings.Trim(host, "[]")
+	switch host {
+	case "", "0.0.0.0", "::":
+		host = "127.0.0.1"
+	}
+
+	if port != "" {
+		return "http://" + net.JoinHostPort(host, port)
+	}
+	return "http://" + host
+}
+
 func registerAuthRoutes(app fiber.Router, deps httpserver.Dependencies, accounts map[string]account) {
 	jwt := httpmw.NewStatelessAuthMiddlewareWithConfig(deps.Authenticator, httpmw.StatelessAuthConfig{
 		CookieName: deps.Config.Auth.SessionCookie.Name,
@@ -214,6 +255,7 @@ func registerAuthRoutes(app fiber.Router, deps httpserver.Dependencies, accounts
 		}
 
 		return c.JSON(httpserver.BuildBrowserLoginResponse(deps.Config, session, acc.UserID, httpserver.BrowserLoginResponseOptions{
+			BaseURL:       browserBaseURL(c, deps.Config.ListenAddr),
 			BootstrapPath: "/auth/bootstrap",
 			HandshakePath: "/handshake",
 		}))
@@ -221,6 +263,7 @@ func registerAuthRoutes(app fiber.Router, deps httpserver.Dependencies, accounts
 
 	app.Post("/auth/bootstrap", jwt.Verify(), csrf.Verify(), func(c *fiber.Ctx) error {
 		payload, err := httpserver.BuildBrowserBootstrap(c, deps, httpserver.BrowserBootstrapOptions{
+			BaseURL:       browserBaseURL(c, deps.Config.ListenAddr),
 			HandshakePath: "/handshake",
 			RestoreDevice: func(c *fiber.Ctx, deps httpserver.Dependencies, deviceID string) error {
 				return deps.DeviceRegistry.Register(deviceID, deriveDeviceSecret(deviceID))
@@ -248,19 +291,27 @@ func registerTodoRoutes(api fiber.Router, deps httpserver.Dependencies, store *t
 
 	api.Post("/todos", func(c *fiber.Ctx) error {
 		var req struct {
-			Title       string `json:"title"`
-			Description string `json:"description"`
+			Title            string `json:"title"`
+			Description      string `json:"description"`
+			ImageDataURL     string `json:"image_data_url"`
+			ImageContentType string `json:"image_content_type"`
 		}
 		if err := decodeEncryptedJSON(c, &req); err != nil {
 			return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 		}
+		imageDataURL, imageContentType, err := normalizeTodoImage(req.ImageDataURL, req.ImageContentType)
+		if err != nil {
+			return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
+		}
 		now := time.Now()
 		item := todo{
-			ID:          fmt.Sprintf("todo-%d", now.UnixNano()),
-			Title:       strings.TrimSpace(req.Title),
-			Description: strings.TrimSpace(req.Description),
-			CreatedAt:   now,
-			UpdatedAt:   now,
+			ID:               fmt.Sprintf("todo-%d", now.UnixNano()),
+			Title:            strings.TrimSpace(req.Title),
+			Description:      strings.TrimSpace(req.Description),
+			ImageDataURL:     imageDataURL,
+			ImageContentType: imageContentType,
+			CreatedAt:        now,
+			UpdatedAt:        now,
 		}
 		if item.Title == "" {
 			return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": "title is required"})
@@ -270,11 +321,17 @@ func registerTodoRoutes(api fiber.Router, deps httpserver.Dependencies, store *t
 
 	api.Put("/todos/:id", func(c *fiber.Ctx) error {
 		var req struct {
-			Title       string `json:"title"`
-			Description string `json:"description"`
-			Done        bool   `json:"done"`
+			Title            string `json:"title"`
+			Description      string `json:"description"`
+			Done             bool   `json:"done"`
+			ImageDataURL     string `json:"image_data_url"`
+			ImageContentType string `json:"image_content_type"`
 		}
 		if err := decodeEncryptedJSON(c, &req); err != nil {
+			return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
+		}
+		imageDataURL, imageContentType, err := normalizeTodoImage(req.ImageDataURL, req.ImageContentType)
+		if err != nil {
 			return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 		}
 		userID := currentUser(c)
@@ -285,6 +342,8 @@ func registerTodoRoutes(api fiber.Router, deps httpserver.Dependencies, store *t
 		item.Title = strings.TrimSpace(req.Title)
 		item.Description = strings.TrimSpace(req.Description)
 		item.Done = req.Done
+		item.ImageDataURL = imageDataURL
+		item.ImageContentType = imageContentType
 		item.UpdatedAt = time.Now()
 		return c.JSON(store.put(userID, item))
 	})
@@ -311,6 +370,41 @@ func currentUser(c *fiber.Ctx) string {
 		return ""
 	}
 	return userCtx.ID
+}
+
+func normalizeTodoImage(dataURL, contentType string) (string, string, error) {
+	dataURL = strings.TrimSpace(dataURL)
+	contentType = strings.TrimSpace(contentType)
+	if dataURL == "" {
+		return "", "", nil
+	}
+	if !strings.HasPrefix(dataURL, "data:") {
+		return "", "", fmt.Errorf("image must be a data URL")
+	}
+	if !strings.Contains(dataURL, ";base64,") {
+		return "", "", fmt.Errorf("image must be base64 encoded")
+	}
+	parts := strings.SplitN(dataURL, ",", 2)
+	if len(parts) != 2 {
+		return "", "", fmt.Errorf("image data is invalid")
+	}
+	meta := parts[0]
+	if contentType == "" {
+		contentType = strings.TrimPrefix(strings.SplitN(strings.TrimPrefix(meta, "data:"), ";", 2)[0], " ")
+	}
+	switch contentType {
+	case "image/png", "image/jpeg", "image/webp", "image/gif":
+	default:
+		return "", "", fmt.Errorf("unsupported image type")
+	}
+	decoded, err := base64.StdEncoding.DecodeString(parts[1])
+	if err != nil {
+		return "", "", fmt.Errorf("image data is invalid")
+	}
+	if len(decoded) > 2*1024*1024 {
+		return "", "", fmt.Errorf("image must be 2MB or smaller")
+	}
+	return dataURL, contentType, nil
 }
 
 func seedAccounts() (map[string]account, error) {
