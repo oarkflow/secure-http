@@ -80,3 +80,16 @@ func TestGenerateTokenPairWithMetadata(t *testing.T) {
 		t.Fatalf("claims.Metadata[user_token] = %q", claims.Metadata["user_token"])
 	}
 }
+
+func TestComputeSessionFingerprintNormalizesLoopbackHosts(t *testing.T) {
+	ipv4 := ComputeSessionFingerprint("127.0.0.1", "agent")
+	ipv6 := ComputeSessionFingerprint("::1", "agent")
+	host := ComputeSessionFingerprint("localhost", "agent")
+
+	if ipv4 == "" || ipv6 == "" || host == "" {
+		t.Fatalf("expected non-empty loopback fingerprints")
+	}
+	if ipv4 != ipv6 || ipv4 != host {
+		t.Fatalf("loopback fingerprints differ: ipv4=%q ipv6=%q host=%q", ipv4, ipv6, host)
+	}
+}

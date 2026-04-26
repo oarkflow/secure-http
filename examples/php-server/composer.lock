@@ -1,0 +1,58 @@
+{
+    "_readme": [
+        "This file locks the dependencies of your project to a known state",
+        "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
+        "This file is @generated automatically"
+    ],
+    "content-hash": "4a1eda41abc13eb090513bc94471efe2",
+    "packages": [
+        {
+            "name": "oarkflow/secure-http-server-sdk",
+            "version": "dev-main",
+            "dist": {
+                "type": "path",
+                "url": "../../sdks/server/php",
+                "reference": "3bd462728f2cd24439f0e1111f406c2528376781"
+            },
+            "require": {
+                "ext-json": "*",
+                "ext-openssl": "*",
+                "php": "^8.1"
+            },
+            "type": "library",
+            "autoload": {
+                "psr-4": {
+                    "Oarkflow\\SecureHttp\\Server\\": "src/"
+                }
+            },
+            "license": [
+                "proprietary"
+            ],
+            "description": "Framework-agnostic PHP server SDK for the Secure HTTP transport contract.",
+            "keywords": [
+                "encryption",
+                "laravel",
+                "middleware",
+                "sdk",
+                "secure-http"
+            ],
+            "transport-options": {
+                "symlink": true,
+                "relative": true
+            }
+        }
+    ],
+    "packages-dev": [],
+    "aliases": [],
+    "minimum-stability": "stable",
+    "stability-flags": {
+        "oarkflow/secure-http-server-sdk": 20
+    },
+    "prefer-stable": false,
+    "prefer-lowest": false,
+    "platform": {
+        "php": "^8.1"
+    },
+    "platform-dev": {},
+    "plugin-api-version": "2.9.0"
+}

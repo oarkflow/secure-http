@@ -1,0 +1,24 @@
+{
+  "name": "oarkflow/secure-http-server-sdk",
+  "version": "dev-main",
+  "description": "Framework-agnostic PHP server SDK for the Secure HTTP transport contract.",
+  "type": "library",
+  "license": "proprietary",
+  "require": {
+    "php": "^8.1",
+    "ext-json": "*",
+    "ext-openssl": "*"
+  },
+  "autoload": {
+    "psr-4": {
+      "Oarkflow\\SecureHttp\\Server\\": "src/"
+    }
+  },
+  "keywords": [
+    "secure-http",
+    "laravel",
+    "middleware",
+    "encryption",
+    "sdk"
+  ]
+}

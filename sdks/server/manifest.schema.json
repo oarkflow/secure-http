@@ -1,0 +1,139 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://oarkflow.dev/secure-http/server-sdk-manifest.schema.json",
+  "title": "Secure HTTP Server SDK Manifest",
+  "type": "object",
+  "required": ["version", "handshakePath", "headers", "auth", "gate"],
+  "properties": {
+    "version": { "type": "string" },
+    "baseURL": { "type": "string" },
+    "runtimeMode": { "type": "string" },
+    "handshakePath": { "type": "string" },
+    "bootstrapPath": { "type": "string" },
+    "headers": {
+      "type": "object",
+      "required": ["sessionID", "userToken", "gate"],
+      "properties": {
+        "sessionID": { "type": "string" },
+        "userToken": { "type": "string" },
+        "gate": {
+          "type": "object",
+          "required": ["secretID", "timestamp", "nonce", "signature", "capability"],
+          "properties": {
+            "secretID": { "type": "string" },
+            "timestamp": { "type": "string" },
+            "nonce": { "type": "string" },
+            "signature": { "type": "string" },
+            "capability": { "type": "string" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "auth": {
+      "type": "object",
+      "required": ["requireDevice", "requireUser", "sessionCookie", "csrf"],
+      "properties": {
+        "requireDevice": { "type": "boolean" },
+        "requireUser": { "type": "boolean" },
+        "sessionCookie": {
+          "type": "object",
+          "required": ["enabled", "name", "httpOnly", "secure"],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "name": { "type": "string" },
+            "path": { "type": "string" },
+            "domain": { "type": "string" },
+            "httpOnly": { "type": "boolean" },
+            "secure": { "type": "boolean" },
+            "sameSite": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        "csrf": {
+          "type": "object",
+          "required": ["enabled", "cookieName", "headerName", "secure"],
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "cookieName": { "type": "string" },
+            "headerName": { "type": "string" },
+            "path": { "type": "string" },
+            "domain": { "type": "string" },
+            "secure": { "type": "boolean" },
+            "sameSite": { "type": "string" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
+    },
+    "gate": {
+      "type": "object",
+      "required": ["strictOrigin"],
+      "properties": {
+        "allowedOrigins": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "strictOrigin": { "type": "boolean" },
+        "maxClockSkew": { "type": "string" },
+        "nonceTTL": { "type": "string" },
+        "secrets": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id"],
+            "properties": {
+              "id": { "type": "string" },
+              "secret": { "type": "string" },
+              "notBefore": { "type": "string" },
+              "expiresAt": { "type": "string" }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "capabilities": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["token"],
+        "properties": {
+          "token": { "type": "string" },
+          "methods": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "paths": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "routes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["path"],
+              "properties": {
+                "path": { "type": "string" },
+                "methods": {
+                  "type": "array",
+                  "items": { "type": "string" }
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": { "type": "string" }
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

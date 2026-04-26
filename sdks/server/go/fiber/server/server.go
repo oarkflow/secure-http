@@ -22,8 +22,8 @@ import (
 	"github.com/gofiber/fiber/v2/middleware/recover"
 	"github.com/oarkflow/securehttp/pkg/config"
 	"github.com/oarkflow/securehttp/pkg/crypto"
-	httpmw "github.com/oarkflow/securehttp/pkg/http/middleware"
 	"github.com/oarkflow/securehttp/pkg/security"
+	httpmw "github.com/oarkflow/securehttp/sdks/server/go/fiber/middleware"
 )
 
 type loginRequest struct {

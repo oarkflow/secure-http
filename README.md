@@ -1,11 +1,14 @@
-# Secure HTTP Reference Implementation
+# Secure HTTP Server SDKs
 
-This repository shows how to front-load every HTTP request with a pre-routing cryptographic challenge, enforce per-route capability tokens, and keep application payloads encrypted from the client all the way into the handlers. The stack ships with:
+This repository now centers on reusable server SDKs for Secure HTTP: front-load every request with a pre-routing cryptographic challenge, enforce per-route capability tokens, and keep application payloads encrypted from the client all the way into the handler boundary. The stack ships with:
 
-- A GoFiber server (`cmd/server`) that loads every secret, capability, and policy from `config/server.json`.
+- A Go server SDK for Fiber and standard `net/http`.
+- A Node.js server SDK with a reusable HTTP handler and Express adapter.
 - A hardened Go client (`cmd/client`, `pkg/http/client`) that performs the handshake, encrypts payloads, and reuses sessions.
 - A WASM bridge (`pkg/wasm/securefetch`) so browsers can call the same encrypted APIs through `secureFetch`.
 - Uniform, opaque error responses plus audit fan-out (console + file + optional webhook).
+
+Start with [sdks/server/README.md](/Users/sujit/Sites/secure-http/sdks/server/README.md:1) if you are integrating the protocol into your own server stack.
 
 ## Reusable server
 
@@ -20,12 +23,41 @@ srv, err := securehttp.NewServerFromFile("config/server.json", securehttp.Server
 log.Fatal(srv.Listen(""))
 ```
 
+For `net/http` and frameworks built on top of it, the repo now ships a stdlib adapter too:
+
+```go
+transport, err := securehttp.NewStdHTTPMiddleware(&security.SecurityPolicy{
+	RequireDevice:     true,
+	RequireUser:       true,
+	DeviceRegistry:    deviceRegistry,
+	UserAuthenticator: userAuthenticator,
+})
+if err != nil {
+	log.Fatal(err)
+}
+
+manifest := securehttp.BuildServerSDKManifest(cfg, securehttp.ServerSDKManifestOptions{
+	BaseURL:       "https://api.example.com",
+	HandshakePath: "/handshake",
+})
+_ = manifest // share this with Node/PHP/Python/Java SDKs
+
+mux := http.NewServeMux()
+mux.Handle("/handshake", stdlib.GateMiddleware(gatekeeper)(transport.HandshakeHandler()))
+mux.Handle("/api/todos", stdlib.GateMiddleware(gatekeeper)(transport.Secure(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	body := stdlib.PlaintextBodyFromContext(r.Context())
+	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "body": string(body)})
+}))))
+```
+
 For browser/WASM flows, the reusable contract now lives in `pkg/browser`. That package is framework-agnostic, so any Go server can return the same login/bootstrap JSON that the WASM bridge understands, even if it does not use Fiber.
 
 The split is:
 
 - `pkg/browser`: canonical browser login/bootstrap types plus pure Go builders
-- `pkg/http/server`: Fiber adapters that produce the same contract from the reusable secure server dependencies
+- `sdks/server/go/fiber/server`: Fiber adapters that produce the same contract from the reusable secure server dependencies
+- `sdks/server/go/stdlib`: `net/http` adapters that work directly with `net/http`, `chi`, `echo.WrapHandler`, and similar stacks
+- `sdks/server/go/manifest`: the Go implementation of the portable server manifest describing headers, cookie/CSRF settings, handshake path, gate settings, and capability layout
 - `pkg/wasm/fetch`: consumes the shared `pkg/browser` bootstrap contract
 
 For clients, you can connect from config in one line:
@@ -42,6 +74,26 @@ If you are integrating with your own Go server instead of the built-in demo serv
 2. Return `browser.BuildLoginResponse(...)` or `securehttp.BuildBrowserLoginResponse(...)`.
 3. Expose a bootstrap route that returns `browser.BuildBootstrapConfig(...)` or `securehttp.BuildBrowserBootstrapConfig(...)`.
 4. Initialize the browser client/WASM bridge with the returned `bootstrapPath`.
+
+If you are integrating from another runtime such as Node, PHP, Python, or Java, build and export the portable manifest first:
+
+```go
+manifest := securehttp.BuildServerSDKManifest(cfg, securehttp.ServerSDKManifestOptions{
+	BaseURL:       "https://api.example.com",
+	HandshakePath: "/handshake",
+	BootstrapPath: "/auth/bootstrap",
+})
+```
+
+That manifest gives non-Go SDKs one canonical source for:
+
+- gate header names and allowed origins
+- secure session header names
+- cookie + CSRF names
+- capability routing rules
+- handshake/bootstrap paths
+
+See [docs/server-sdk.md](/Users/sujit/Sites/secure-http/docs/server-sdk.md:1) for framework notes covering `net/http`, `chi`, `echo`, Express, Laravel/Slim/Raw PHP, FastAPI/Flask, and Spring-style Java servers.
 
 ## Server quickstart
 

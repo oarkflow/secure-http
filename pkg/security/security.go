@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 	"sync"
 	"time"
@@ -190,9 +191,9 @@ func (ml MultiAuditLogger) Record(evt AuditEvent) {
 // DeviceRegistry validates device signatures during the handshake.
 type DeviceRegistry interface {
 	Validate(deviceID string, signature []byte, payload []byte) error
-	IsRegistered(deviceID string) bool // Added for origin validation
+	IsRegistered(deviceID string) bool             // Added for origin validation
 	Register(deviceID string, secret []byte) error // Added for dynamic registration
-	GetSecret(deviceID string) ([]byte, error) // Added for secret retrieval
+	GetSecret(deviceID string) ([]byte, error)     // Added for secret retrieval
 }
 
 // UserAuthenticator validates user tokens and produces contextual claims.
@@ -464,7 +465,27 @@ func ComputeSessionFingerprint(ip, userAgent string) string {
 	if strings.TrimSpace(ip) == "" && strings.TrimSpace(userAgent) == "" {
 		return ""
 	}
-	composite := strings.TrimSpace(ip) + "|" + strings.TrimSpace(userAgent)
+	composite := normalizeFingerprintIP(ip) + "|" + strings.TrimSpace(userAgent)
 	sum := sha256.Sum256([]byte(composite))
 	return hex.EncodeToString(sum[:])
+}
+
+func normalizeFingerprintIP(ip string) string {
+	trimmed := strings.TrimSpace(ip)
+	if trimmed == "" {
+		return ""
+	}
+	if parsed := net.ParseIP(trimmed); parsed != nil {
+		if parsed.IsLoopback() {
+			return "loopback"
+		}
+		if v4 := parsed.To4(); v4 != nil {
+			return v4.String()
+		}
+		return parsed.String()
+	}
+	if strings.EqualFold(trimmed, "localhost") {
+		return "loopback"
+	}
+	return trimmed
 }

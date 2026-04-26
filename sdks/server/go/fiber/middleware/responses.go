@@ -6,7 +6,6 @@ func respondNotFound(c *fiber.Ctx) error {
 	if c == nil {
 		return nil
 	}
-	c.Response().Reset()
 	return c.SendStatus(fiber.StatusNotFound)
 }
 

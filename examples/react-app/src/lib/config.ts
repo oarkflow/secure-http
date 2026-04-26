@@ -3,9 +3,14 @@ function normalizeBaseUrl(value: string | undefined, fallback: string) {
   return (trimmed && trimmed.replace(/\/+$/, '')) || fallback
 }
 
+const browserFallback =
+  typeof window !== 'undefined' && window.location?.origin
+    ? window.location.origin
+    : 'http://localhost:9443'
+
 export const secureHttpBackendUrl = normalizeBaseUrl(
   import.meta.env.VITE_SECURE_HTTP_BACKEND_URL,
-  'http://localhost:9443',
+  browserFallback,
 )
 
 export const secureHttpAuthUrls = {

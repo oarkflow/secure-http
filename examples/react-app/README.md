@@ -64,6 +64,19 @@ go run ./examples/react-app \
 
 Use `config.dev.json` for local HTTP development and `config.production.json` as the strict HTTPS deployment template.
 
+## Run the PHP Backend
+
+There is also a Composer-based PHP demo server in `examples/php-server`.
+
+From `examples/php-server`:
+
+```bash
+composer install
+composer run serve
+```
+
+That server listens on `http://127.0.0.1:9080` and exposes the same login, bootstrap, handshake, and todo routes as the Go demo.
+
 ## Run the Frontend
 
 From `examples/react-app`:
@@ -71,6 +84,12 @@ From `examples/react-app`:
 ```bash
 npm install
 npm run dev -- --host localhost --port 5173
+```
+
+To point the React app at the PHP demo server instead:
+
+```bash
+VITE_SECURE_HTTP_BACKEND_URL=http://127.0.0.1:9080 npm run dev -- --host 127.0.0.1 --port 5173
 ```
 
 Then open:

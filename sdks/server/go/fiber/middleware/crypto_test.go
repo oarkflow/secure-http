@@ -149,6 +149,47 @@ func TestCSRFMiddlewareRejectsCookieAuthWithoutHeader(t *testing.T) {
 	}
 }
 
+func TestOpaqueAuthFailurePreservesExistingCORSHeaders(t *testing.T) {
+	app := fiber.New()
+	app.Use(func(c *fiber.Ctx) error {
+		c.Set(fiber.HeaderAccessControlAllowOrigin, "http://localhost:5173")
+		c.Set(fiber.HeaderAccessControlAllowCredentials, "true")
+		return c.Next()
+	})
+	auth, err := security.NewStatelessAuthenticator(security.StatelessAuthConfig{
+		SigningKey:         []byte("01234567890123456789012345678901"),
+		Issuer:             "issuer",
+		Audience:           "aud",
+		AccessTokenTTL:     time.Minute,
+		RefreshTokenTTL:    time.Hour,
+		Algorithm:          "HS512",
+		RequireFingerprint: false,
+	})
+	if err != nil {
+		t.Fatalf("NewStatelessAuthenticator() error = %v", err)
+	}
+	sam := NewStatelessAuthMiddleware(auth)
+	app.Post("/auth/bootstrap", sam.Verify(), func(c *fiber.Ctx) error {
+		return c.SendStatus(fiber.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/auth/bootstrap", nil)
+	req.Header.Set("Origin", "http://localhost:5173")
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatalf("app.Test() error = %v", err)
+	}
+	if resp.StatusCode != fiber.StatusNotFound {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, fiber.StatusNotFound)
+	}
+	if got := resp.Header.Get(fiber.HeaderAccessControlAllowOrigin); got != "http://localhost:5173" {
+		t.Fatalf("Access-Control-Allow-Origin = %q", got)
+	}
+	if got := resp.Header.Get(fiber.HeaderAccessControlAllowCredentials); got != "true" {
+		t.Fatalf("Access-Control-Allow-Credentials = %q", got)
+	}
+}
+
 func TestStatelessAuthMiddlewareRejectsMissingTokenWithOpaqueNotFound(t *testing.T) {
 	auth, err := security.NewStatelessAuthenticator(security.StatelessAuthConfig{
 		SigningKey:         []byte("01234567890123456789012345678901"),

@@ -19,9 +19,9 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"golang.org/x/crypto/bcrypt"
 
-	httpmw "github.com/oarkflow/securehttp/pkg/http/middleware"
-	httpserver "github.com/oarkflow/securehttp/pkg/http/server"
 	"github.com/oarkflow/securehttp/pkg/security"
+	httpmw "github.com/oarkflow/securehttp/sdks/server/go/fiber/middleware"
+	httpserver "github.com/oarkflow/securehttp/sdks/server/go/fiber/server"
 )
 
 type account struct {
