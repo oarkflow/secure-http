@@ -108,8 +108,16 @@ func main() {
 	}
 	todos := newTodoStore()
 
-	srv, err := httpserver.NewFromFile(*configPath, httpserver.Options{
-		ListenAddr:         *addr,
+	runtime, err := httpserver.NewRuntimeFromFile(*configPath, httpserver.RuntimeOptions{
+		ListenAddr: *addr,
+	})
+	if err != nil {
+		log.Fatalf("initialize secure runtime: %v", err)
+	}
+	defer runtime.Close()
+
+	app := fiber.New(httpserver.DefaultFiberConfig())
+	_, err = runtime.Mount(app, httpserver.MountOptions{
 		WebRoot:            *webRoot,
 		StaticPrefix:       *staticPrefix,
 		EnableStatic:       strings.TrimSpace(*webRoot) != "",
@@ -122,16 +130,15 @@ func main() {
 		},
 	})
 	if err != nil {
-		log.Fatalf("build todo sample server: %v", err)
+		log.Fatalf("build todo sample app: %v", err)
 	}
-	defer srv.Close()
 
 	if strings.TrimSpace(*webRoot) != "" {
-		log.Printf("Todo password sample listening on %s (frontend at %s)", serverAddr(*addr, srv), displayStaticPrefix(*staticPrefix))
+		log.Printf("Todo password sample listening on %s (frontend at %s)", serverAddr(*addr, runtime), displayStaticPrefix(*staticPrefix))
 	} else {
-		log.Printf("Todo password sample listening on %s", serverAddr(*addr, srv))
+		log.Printf("Todo password sample listening on %s", serverAddr(*addr, runtime))
 	}
-	log.Fatal(srv.Listen(""))
+	log.Fatal(app.Listen(serverAddr(*addr, runtime)))
 }
 
 func displayStaticPrefix(prefix string) string {
@@ -142,14 +149,14 @@ func displayStaticPrefix(prefix string) string {
 	return strings.TrimSuffix(prefix, "/")
 }
 
-func serverAddr(override string, srv *httpserver.Server) string {
+func serverAddr(override string, runtime *httpserver.Runtime) string {
 	if strings.TrimSpace(override) != "" {
 		return override
 	}
-	if srv == nil {
+	if runtime == nil {
 		return ""
 	}
-	return srv.Dependencies().Config.ListenAddr
+	return runtime.ListenAddr()
 }
 
 func browserBaseURL(c *fiber.Ctx, listenAddr string) string {

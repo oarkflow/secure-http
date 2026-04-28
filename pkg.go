@@ -19,6 +19,10 @@ type GateSecret = httpclient.GateSecret
 type Server = httpserver.Server
 type ServerOptions = httpserver.Options
 type ServerDependencies = httpserver.Dependencies
+type ServerRuntime = httpserver.Runtime
+type ServerRuntimeOptions = httpserver.RuntimeOptions
+type FiberServerMountOptions = httpserver.MountOptions
+type FiberMountedRoutes = httpserver.MountedRoutes
 type AuthSession = httpserver.AuthSession
 type BrowserGateSecret = browser.GateSecret
 type BrowserLoginResponse = browser.LoginResponse
@@ -67,12 +71,28 @@ func NewServer(opts ServerOptions) (*Server, error) {
 	return httpserver.New(opts)
 }
 
+func NewServerRuntime(opts ServerRuntimeOptions) (*ServerRuntime, error) {
+	return httpserver.NewRuntime(opts)
+}
+
+func NewServerRuntimeFromFile(path string, opts ...ServerRuntimeOptions) (*ServerRuntime, error) {
+	var resolved ServerRuntimeOptions
+	if len(opts) > 0 {
+		resolved = opts[0]
+	}
+	return httpserver.NewRuntimeFromFile(path, resolved)
+}
+
 func NewServerFromFile(path string, opts ...ServerOptions) (*Server, error) {
 	var resolved ServerOptions
 	if len(opts) > 0 {
 		resolved = opts[0]
 	}
 	return httpserver.NewFromFile(path, resolved)
+}
+
+func DefaultFiberServerConfig() fiber.Config {
+	return httpserver.DefaultFiberConfig()
 }
 
 func BuildBrowserLoginResponse(opts BrowserLoginResponseOptions) BrowserLoginResponse {

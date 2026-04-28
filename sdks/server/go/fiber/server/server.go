@@ -17,9 +17,6 @@ import (
 	"time"
 
 	"github.com/gofiber/fiber/v2"
-	"github.com/gofiber/fiber/v2/middleware/cors"
-	"github.com/gofiber/fiber/v2/middleware/logger"
-	"github.com/gofiber/fiber/v2/middleware/recover"
 	"github.com/oarkflow/securehttp/pkg/config"
 	"github.com/oarkflow/securehttp/pkg/crypto"
 	"github.com/oarkflow/securehttp/pkg/security"
@@ -90,206 +87,59 @@ type AuthSession struct {
 
 // NewFromFile loads the config file and builds a reusable server.
 func NewFromFile(path string, opts Options) (*Server, error) {
-	cfg, err := config.LoadServerConfig(path)
+	runtime, err := NewRuntimeFromFile(path, RuntimeOptions{
+		ListenAddr: opts.ListenAddr,
+	})
 	if err != nil {
 		return nil, err
 	}
-	opts.Config = cfg
-	return New(opts)
+	return newServerFromRuntime(runtime, opts)
 }
 
 // New builds a reusable server app from an in-memory config.
 func New(opts Options) (*Server, error) {
-	cfg := opts.Config
-	if cfg == nil {
-		return nil, fmt.Errorf("server config is required")
-	}
-
-	authKey := []byte(cfg.Auth.JWTSigningKey)
-	if len(authKey) == 0 {
-		return nil, fmt.Errorf("jwt signing key is required")
-	}
-	statelessAuth, err := security.NewStatelessAuthenticator(security.StatelessAuthConfig{
-		SigningKey:         authKey,
-		AccessTokenTTL:     15 * time.Minute,
-		RefreshTokenTTL:    7 * 24 * time.Hour,
-		Algorithm:          "HS512",
-		Issuer:             "secure-http-server",
-		Audience:           "secure-http-api",
-		RequireFingerprint: true,
+	runtime, err := NewRuntime(RuntimeOptions{
+		Config:     opts.Config,
+		ListenAddr: opts.ListenAddr,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("initialize stateless auth: %w", err)
-	}
-
-	auditLogger, cleanup, err := cfg.BuildAuditLogger()
-	if err != nil {
-		return nil, fmt.Errorf("initialize audit logger: %w", err)
-	}
-	fail := func(err error) (*Server, error) {
-		if cleanup != nil {
-			cleanup()
-		}
 		return nil, err
 	}
+	return newServerFromRuntime(runtime, opts)
+}
 
-	capStore, err := cfg.BuildCapabilityStore()
+func newServerFromRuntime(runtime *Runtime, opts Options) (*Server, error) {
+	if runtime == nil {
+		return nil, fmt.Errorf("runtime is not initialized")
+	}
+	app := fiber.New(DefaultFiberConfig())
+	mounted, err := runtime.Mount(app, mountOptionsFromOptions(opts))
 	if err != nil {
-		return fail(fmt.Errorf("build capability store: %w", err))
-	}
-
-	gateCfg, err := cfg.GatekeeperConfig(capStore, auditLogger)
-	if err != nil {
-		return fail(fmt.Errorf("compose gatekeeper config: %w", err))
-	}
-	gatekeeper, err := security.NewGatekeeper(gateCfg)
-	if err != nil {
-		return fail(fmt.Errorf("initialize gatekeeper: %w", err))
-	}
-
-	deviceRegistry, err := cfg.BuildDeviceRegistry()
-	if err != nil {
-		return fail(fmt.Errorf("build device registry: %w", err))
-	}
-
-	userAuth, err := cfg.BuildUserAuthenticator()
-	if err != nil {
-		return fail(fmt.Errorf("build user authenticator: %w", err))
-	}
-
-	policy := &security.SecurityPolicy{
-		RequireDevice:     cfg.Auth.RequireDevice,
-		RequireUser:       cfg.Auth.RequireUser,
-		DeviceRegistry:    deviceRegistry,
-		UserAuthenticator: userAuth,
-		Logger:            auditLogger,
-	}
-
-	cryptoMiddleware, err := httpmw.NewCryptoMiddleware(policy)
-	if err != nil {
-		return fail(fmt.Errorf("initialize crypto middleware: %w", err))
-	}
-
-	listenAddr := cfg.ListenAddr
-	if override := strings.TrimSpace(opts.ListenAddr); override != "" {
-		listenAddr = override
-	}
-
-	app := fiber.New(fiber.Config{
-		BodyLimit: 10 * 1024 * 1024,
-		ErrorHandler: func(c *fiber.Ctx, err error) error {
-			c.Response().Reset()
-			return c.SendStatus(fiber.StatusNotFound)
-		},
-	})
-
-	app.Use(recover.New())
-	app.Use(logger.New())
-	if allowOrigins := cfg.CORSAllowOrigins(); allowOrigins != "" {
-		allowedOriginSet := make(map[string]struct{}, len(cfg.Gate.AllowedOrigins))
-		for _, origin := range cfg.Gate.AllowedOrigins {
-			trimmed := strings.TrimSpace(origin)
-			if trimmed != "" {
-				allowedOriginSet[trimmed] = struct{}{}
-			}
-		}
-		app.Use(func(c *fiber.Ctx) error {
-			origin := strings.TrimSpace(c.Get("Origin"))
-			if origin != "" {
-				if _, ok := allowedOriginSet[origin]; ok {
-					c.Set("Access-Control-Allow-Origin", origin)
-					c.Set("Vary", "Origin")
-					c.Set("Access-Control-Allow-Credentials", "true")
-					c.Set("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,PATCH,OPTIONS")
-					c.Set("Access-Control-Allow-Headers", "Origin,Referer,Content-Type,Accept,Authorization,X-CSRF-Token,X-Gate-Time,X-Gate-Sign,X-Gate-Purpose,X-Gate-Seq,X-Gate-Key,X-Gate-Nonce,X-Gate-Timestamp,X-Gate-Signature,X-Capability-Token,X-Session-ID,X-User-Token,X-Original-Content-Type")
-				}
-			}
-			if c.Method() == fiber.MethodOptions {
-				return c.SendStatus(fiber.StatusNoContent)
-			}
-			return c.Next()
-		})
-		app.Use(cors.New(cors.Config{
-			AllowOrigins:     allowOrigins,
-			AllowMethods:     "GET,POST,PUT,DELETE,PATCH,OPTIONS",
-			AllowHeaders:     "Origin,Referer,Content-Type,Accept,Authorization,X-CSRF-Token,X-Gate-Time,X-Gate-Sign,X-Gate-Purpose,X-Gate-Seq,X-Gate-Key,X-Gate-Nonce,X-Gate-Timestamp,X-Gate-Signature,X-Capability-Token,X-Session-ID,X-User-Token,X-Original-Content-Type",
-			AllowCredentials: true,
-			MaxAge:           86400,
-		}))
-	}
-
-	deps := Dependencies{
-		Config:            cfg,
-		AuditLogger:       auditLogger,
-		SessionManager:    cryptoMiddleware.GetSessionManager(),
-		CryptoMiddleware:  cryptoMiddleware,
-		Gatekeeper:        gatekeeper,
-		Authenticator:     statelessAuth,
-		DeviceRegistry:    deviceRegistry,
-		UserAuthenticator: userAuth,
-	}
-
-	gateMiddleware := httpmw.NewGateMiddleware(gatekeeper)
-	jwtMiddleware := httpmw.NewStatelessAuthMiddlewareWithConfig(statelessAuth, httpmw.StatelessAuthConfig{
-		CookieName: cfg.Auth.SessionCookie.Name,
-	})
-	csrfMiddleware := httpmw.NewCSRFMiddleware(httpmw.CSRFConfig{
-		Enabled:    cfg.Auth.CSRF.Enabled,
-		CookieName: cfg.Auth.CSRF.CookieName,
-		HeaderName: cfg.Auth.CSRF.HeaderName,
-	})
-	uploads := newUploadPolicy(cfg.Uploads)
-
-	app.Post("/handshake", gateMiddleware.Handle(), cryptoMiddleware.Handshake())
-	app.Get("/health", func(c *fiber.Ctx) error {
-		return c.JSON(fiber.Map{
-			"status":   "healthy",
-			"sessions": cryptoMiddleware.GetSessionManager().SessionCount(),
-		})
-	})
-
-	if opts.EnableDemoRoutes && !cfg.IsStrictMode() {
-		app.Post("/login", handleLogon(cfg, userAuth, deviceRegistry, statelessAuth))
-		app.Post("/bootstrap", jwtMiddleware.Verify(), csrfMiddleware.Verify(), handleBootstrap(deps))
-	}
-	if opts.RegisterPublicRoutes != nil {
-		opts.RegisterPublicRoutes(app, deps)
-	}
-
-	api := app.Group("/api")
-	api.Use(gateMiddleware.Handle())
-	if opts.RequireAccessToken {
-		api.Use(jwtMiddleware.Verify())
-		api.Use(csrfMiddleware.Verify())
-	}
-	api.Use(cryptoMiddleware.Decrypt())
-	api.Use(cryptoMiddleware.Encrypt())
-
-	if opts.EnableDemoRoutes {
-		registerDemoRoutes(api, deps, uploads)
-	}
-	if opts.RegisterAPIRoutes != nil {
-		opts.RegisterAPIRoutes(api, deps)
-	}
-
-	if opts.EnableStatic {
-		webRoot := opts.WebRoot
-		if strings.TrimSpace(webRoot) == "" {
-			webRoot = "dist"
-		}
-		if err := ensureStaticBundle(webRoot); err != nil {
-			return fail(fmt.Errorf("static assets: %w", err))
-		}
-		registerStaticRoutes(app, normalizePrefix(opts.StaticPrefix), webRoot)
+		_ = runtime.Close()
+		return nil, err
 	}
 
 	return &Server{
 		app:        app,
-		api:        api,
-		deps:       deps,
-		listenAddr: listenAddr,
-		cleanup:    cleanup,
+		api:        mounted.API,
+		deps:       runtime.Dependencies(),
+		listenAddr: runtime.ListenAddr(),
+		cleanup: func() {
+			_ = runtime.Close()
+		},
 	}, nil
+}
+
+func mountOptionsFromOptions(opts Options) MountOptions {
+	return MountOptions{
+		WebRoot:              opts.WebRoot,
+		StaticPrefix:         opts.StaticPrefix,
+		EnableStatic:         opts.EnableStatic,
+		EnableDemoRoutes:     opts.EnableDemoRoutes,
+		RequireAccessToken:   opts.RequireAccessToken,
+		RegisterAPIRoutes:    opts.RegisterAPIRoutes,
+		RegisterPublicRoutes: opts.RegisterPublicRoutes,
+	}
 }
 
 // App returns the underlying Fiber app.

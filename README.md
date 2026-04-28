@@ -23,6 +23,29 @@ srv, err := securehttp.NewServerFromFile("config/server.json", securehttp.Server
 log.Fatal(srv.Listen(""))
 ```
 
+If your application already owns the Fiber app, mount the secure transport as a library instead of handing app construction over to the SDK:
+
+```go
+runtime, err := securehttp.NewServerRuntimeFromFile("config/server.json")
+if err != nil {
+	log.Fatal(err)
+}
+defer runtime.Close()
+
+app := fiber.New(securehttp.DefaultFiberServerConfig())
+_, err = runtime.Mount(app, securehttp.FiberServerMountOptions{
+	RequireAccessToken: true,
+	RegisterAPIRoutes: func(api fiber.Router, deps securehttp.ServerDependencies) {
+		api.Post("/widgets", createWidget)
+	},
+})
+if err != nil {
+	log.Fatal(err)
+}
+
+log.Fatal(app.Listen(runtime.ListenAddr()))
+```
+
 For `net/http` and frameworks built on top of it, the repo now ships a stdlib adapter too:
 
 ```go
