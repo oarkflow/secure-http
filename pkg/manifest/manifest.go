@@ -1,4 +1,4 @@
-package serversdk
+package manifest
 
 import (
 	"strings"

@@ -5,7 +5,7 @@ This repo now has two reusable Go server-side integration layers:
 - `sdks/server/go/fiber/server`: the Fiber-native server SDK.
 - `sdks/server/go/stdlib`: a standard `net/http` adapter that speaks the same handshake, gate, decrypt, and encrypt protocol.
 
-On top of that, `sdks/server/go/manifest` exports a portable manifest so non-Go runtimes can implement the same contract without guessing header names, cookie names, or route requirements.
+On top of that, `pkg/manifest` exports a portable manifest so non-Go runtimes can implement the same contract without guessing header names, cookie names, or route requirements.
 
 ## Go
 

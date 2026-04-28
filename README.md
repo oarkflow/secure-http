@@ -80,7 +80,7 @@ The split is:
 - `pkg/browser`: canonical browser login/bootstrap types plus pure Go builders
 - `sdks/server/go/fiber/server`: Fiber adapters that produce the same contract from the reusable secure server dependencies
 - `sdks/server/go/stdlib`: `net/http` adapters that work directly with `net/http`, `chi`, `echo.WrapHandler`, and similar stacks
-- `sdks/server/go/manifest`: the Go implementation of the portable server manifest describing headers, cookie/CSRF settings, handshake path, gate settings, and capability layout
+- `pkg/manifest`: the shared implementation of the portable server manifest describing headers, cookie/CSRF settings, handshake path, gate settings, and capability layout
 - `pkg/wasm/fetch`: consumes the shared `pkg/browser` bootstrap contract
 
 For clients, you can connect from config in one line:

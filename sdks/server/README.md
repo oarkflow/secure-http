@@ -27,4 +27,4 @@ Every server SDK in this repo is expected to implement the same transport contra
 5. Secure response encryption after user handlers return.
 6. Shared browser login/bootstrap payloads for cookie-backed browser clients.
 
-Use [manifest.schema.json](./manifest.schema.json) with [go/manifest/manifest.go](./go/manifest/manifest.go) as the canonical portable contract.
+Use [manifest.schema.json](./manifest.schema.json) with [pkg/manifest/manifest.go](/Users/sujit/Sites/secure-http/pkg/manifest/manifest.go:1) as the canonical portable contract.
