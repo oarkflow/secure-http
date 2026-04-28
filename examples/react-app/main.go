@@ -16,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v3"
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/oarkflow/securehttp/pkg/security"
@@ -159,7 +159,7 @@ func serverAddr(override string, runtime *httpserver.Runtime) string {
 	return runtime.ListenAddr()
 }
 
-func browserBaseURL(c *fiber.Ctx, listenAddr string) string {
+func browserBaseURL(c fiber.Ctx, listenAddr string) string {
 	if c != nil {
 		if forwardedProto := strings.TrimSpace(c.Get("X-Forwarded-Proto")); forwardedProto != "" {
 			if forwardedHost := strings.TrimSpace(c.Get("X-Forwarded-Host")); forwardedHost != "" {
@@ -207,7 +207,7 @@ func registerAuthRoutes(app fiber.Router, deps httpserver.Dependencies, accounts
 		HeaderName: deps.Config.Auth.CSRF.HeaderName,
 	})
 
-	app.Post("/auth/login", func(c *fiber.Ctx) error {
+	app.Post("/auth/login", func(c fiber.Ctx) error {
 		var req struct {
 			Username   string `json:"username"`
 			UserID     string `json:"user_id"`
@@ -216,7 +216,7 @@ func registerAuthRoutes(app fiber.Router, deps httpserver.Dependencies, accounts
 			Password   string `json:"password"`
 			UserToken  string `json:"user_token"`
 		}
-		if err := c.BodyParser(&req); err != nil {
+		if err := c.Bind().Body(&req); err != nil {
 			return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": "invalid request"})
 		}
 
@@ -280,14 +280,14 @@ func registerAuthRoutes(app fiber.Router, deps httpserver.Dependencies, accounts
 		}))
 	})
 
-	app.Post("/auth/bootstrap", jwt.Verify(), csrf.Verify(), func(c *fiber.Ctx) error {
+	app.Post("/auth/bootstrap", jwt.Verify(), csrf.Verify(), func(c fiber.Ctx) error {
 		payload, err := httpserver.BuildBrowserBootstrap(c, deps, httpserver.BrowserBootstrapOptions{
 			BaseURL:       browserBaseURL(c, deps.Config.ListenAddr),
 			HandshakePath: "/handshake",
-			RestoreDevice: func(c *fiber.Ctx, deps httpserver.Dependencies, deviceID string) error {
+			RestoreDevice: func(c fiber.Ctx, deps httpserver.Dependencies, deviceID string) error {
 				return deps.DeviceRegistry.Register(deviceID, deriveDeviceSecret(deviceID))
 			},
-			ResolveDeviceSecret: func(c *fiber.Ctx, deps httpserver.Dependencies, deviceID string) (string, error) {
+			ResolveDeviceSecret: func(c fiber.Ctx, deps httpserver.Dependencies, deviceID string) (string, error) {
 				return "base64:" + base64.StdEncoding.EncodeToString(deriveDeviceSecret(deviceID)), nil
 			},
 		})
@@ -297,18 +297,18 @@ func registerAuthRoutes(app fiber.Router, deps httpserver.Dependencies, accounts
 		return c.JSON(payload)
 	})
 
-	app.Post("/auth/logout", jwt.Verify(), csrf.Verify(), func(c *fiber.Ctx) error {
+	app.Post("/auth/logout", jwt.Verify(), csrf.Verify(), func(c fiber.Ctx) error {
 		httpserver.ClearAuthSession(c, deps)
 		return c.JSON(fiber.Map{"success": true})
 	})
 }
 
 func registerTodoRoutes(api fiber.Router, _ httpserver.Dependencies, store *todoStore) {
-	api.Get("/todos", func(c *fiber.Ctx) error {
+	api.Get("/todos", func(c fiber.Ctx) error {
 		return c.JSON(fiber.Map{"items": store.list(currentUser(c))})
 	})
 
-	api.Post("/todos", func(c *fiber.Ctx) error {
+	api.Post("/todos", func(c fiber.Ctx) error {
 		var req struct {
 			Title            string `json:"title"`
 			Description      string `json:"description"`
@@ -338,7 +338,7 @@ func registerTodoRoutes(api fiber.Router, _ httpserver.Dependencies, store *todo
 		return c.JSON(store.put(currentUser(c), item))
 	})
 
-	api.Put("/todos/:id", func(c *fiber.Ctx) error {
+	api.Put("/todos/:id", func(c fiber.Ctx) error {
 		var req struct {
 			Title            string `json:"title"`
 			Description      string `json:"description"`
@@ -367,7 +367,7 @@ func registerTodoRoutes(api fiber.Router, _ httpserver.Dependencies, store *todo
 		return c.JSON(store.put(userID, item))
 	})
 
-	api.Delete("/todos/:id", func(c *fiber.Ctx) error {
+	api.Delete("/todos/:id", func(c fiber.Ctx) error {
 		if !store.delete(currentUser(c), c.Params("id")) {
 			return c.Status(http.StatusNotFound).JSON(fiber.Map{"error": "todo not found"})
 		}
@@ -375,7 +375,7 @@ func registerTodoRoutes(api fiber.Router, _ httpserver.Dependencies, store *todo
 	})
 }
 
-func decodeEncryptedJSON(c *fiber.Ctx, out any) error {
+func decodeEncryptedJSON(c fiber.Ctx, out any) error {
 	body, _ := c.Locals("decrypted_body").([]byte)
 	if len(body) == 0 {
 		return fmt.Errorf("missing request body")
@@ -383,7 +383,7 @@ func decodeEncryptedJSON(c *fiber.Ctx, out any) error {
 	return json.Unmarshal(body, out)
 }
 
-func currentUser(c *fiber.Ctx) string {
+func currentUser(c fiber.Ctx) string {
 	userCtx, _ := c.Locals("user_context").(*security.UserContext)
 	if userCtx == nil {
 		return ""

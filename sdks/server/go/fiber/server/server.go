@@ -16,7 +16,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v3"
+	"github.com/gofiber/fiber/v3/middleware/static"
 	"github.com/oarkflow/securehttp/pkg/config"
 	"github.com/oarkflow/securehttp/pkg/crypto"
 	"github.com/oarkflow/securehttp/pkg/security"
@@ -215,19 +216,20 @@ func registerDemoRoutes(api fiber.Router, deps Dependencies, uploads uploadPolic
 }
 
 func registerStaticRoutes(app *fiber.App, prefix string, webRoot string) {
-	app.Static(prefix, webRoot, fiber.Static{
+	app.Get(prefix+"*", static.New("", static.Config{
+		FS:            os.DirFS(webRoot),
 		Compress:      true,
 		Browse:        false,
-		Index:         "index.html",
+		IndexNames:    []string{"index.html"},
 		CacheDuration: 30 * time.Minute,
 		MaxAge:        600,
-	})
-	app.Get("/", func(c *fiber.Ctx) error {
+	}))
+	app.Get("/", func(c fiber.Ctx) error {
 		target := prefix
 		if !strings.HasSuffix(target, "/") {
 			target += "/"
 		}
-		return c.Redirect(target, fiber.StatusTemporaryRedirect)
+		return c.Redirect().Status(fiber.StatusTemporaryRedirect).To(target)
 	})
 }
 
@@ -282,7 +284,7 @@ func sanitizeUploadName(name string) string {
 }
 
 func handleEcho() fiber.Handler {
-	return func(c *fiber.Ctx) error {
+	return func(c fiber.Ctx) error {
 		body, err := decryptedBody(c)
 		if err != nil {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
@@ -310,7 +312,7 @@ func handleEcho() fiber.Handler {
 }
 
 func handleProtected() fiber.Handler {
-	return func(c *fiber.Ctx) error {
+	return func(c fiber.Ctx) error {
 		userCtx := c.Locals("user")
 		return c.JSON(fiber.Map{
 			"success": true,
@@ -331,7 +333,7 @@ func handleUserInfo() fiber.Handler {
 	type userRequest struct {
 		Name string `json:"name"`
 	}
-	return func(c *fiber.Ctx) error {
+	return func(c fiber.Ctx) error {
 		body, err := decryptedBody(c)
 		if err != nil {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
@@ -360,7 +362,7 @@ func handleResourceCreate() fiber.Handler {
 		Owner  string `json:"owner"`
 		Reason string `json:"reason"`
 	}
-	return func(c *fiber.Ctx) error {
+	return func(c fiber.Ctx) error {
 		body, err := decryptedBody(c)
 		if err != nil {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
@@ -385,7 +387,7 @@ func handleResourceCreate() fiber.Handler {
 }
 
 func handleSecureLogin(auditLogger security.AuditLogger) fiber.Handler {
-	return func(c *fiber.Ctx) error {
+	return func(c fiber.Ctx) error {
 		body, err := decryptedBody(c)
 		if err != nil {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
@@ -425,7 +427,7 @@ func handleSecureLogin(auditLogger security.AuditLogger) fiber.Handler {
 }
 
 func handleSessionState() fiber.Handler {
-	return func(c *fiber.Ctx) error {
+	return func(c fiber.Ctx) error {
 		session, err := requireSession(c)
 		if err != nil {
 			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": err.Error()})
@@ -453,7 +455,7 @@ func handleSessionState() fiber.Handler {
 }
 
 func handlePentestProbe(auditLogger security.AuditLogger) fiber.Handler {
-	return func(c *fiber.Ctx) error {
+	return func(c fiber.Ctx) error {
 		body, err := decryptedBody(c)
 		if err != nil {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
@@ -485,7 +487,7 @@ func handlePentestProbe(auditLogger security.AuditLogger) fiber.Handler {
 }
 
 func handleLogout(sessionManager *crypto.SessionManager, auditLogger security.AuditLogger, authCfg config.AuthConfig) fiber.Handler {
-	return func(c *fiber.Ctx) error {
+	return func(c fiber.Ctx) error {
 		if sessionManager == nil {
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "session manager unavailable"})
 		}
@@ -526,7 +528,7 @@ func handleLogout(sessionManager *crypto.SessionManager, auditLogger security.Au
 	}
 }
 
-func securityEnvelope(c *fiber.Ctx) fiber.Map {
+func securityEnvelope(c fiber.Ctx) fiber.Map {
 	payload := fiber.Map{}
 	if deviceID, ok := c.Locals("device_id").(string); ok && deviceID != "" {
 		payload["device_id"] = deviceID
@@ -540,7 +542,7 @@ func securityEnvelope(c *fiber.Ctx) fiber.Map {
 	return payload
 }
 
-func sessionDescriptor(c *fiber.Ctx) fiber.Map {
+func sessionDescriptor(c fiber.Ctx) fiber.Map {
 	session, err := requireSession(c)
 	if err != nil {
 		return fiber.Map{"error": err.Error()}
@@ -554,7 +556,7 @@ func sessionDescriptor(c *fiber.Ctx) fiber.Map {
 	}
 }
 
-func decryptedBody(c *fiber.Ctx) ([]byte, error) {
+func decryptedBody(c fiber.Ctx) ([]byte, error) {
 	raw, ok := c.Locals("decrypted_body").([]byte)
 	if !ok {
 		return nil, errors.New("secure payload missing")
@@ -565,7 +567,7 @@ func decryptedBody(c *fiber.Ctx) ([]byte, error) {
 	return raw, nil
 }
 
-func requireSession(c *fiber.Ctx) (*crypto.Session, error) {
+func requireSession(c fiber.Ctx) (*crypto.Session, error) {
 	session, ok := c.Locals("session").(*crypto.Session)
 	if !ok || session == nil {
 		return nil, errors.New("session not found")
@@ -574,7 +576,7 @@ func requireSession(c *fiber.Ctx) (*crypto.Session, error) {
 }
 
 func handleFileUpload(auditLogger security.AuditLogger, policy uploadPolicy) fiber.Handler {
-	return func(c *fiber.Ctx) error {
+	return func(c fiber.Ctx) error {
 		body, err := decryptedBody(c)
 		if err != nil {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
@@ -725,7 +727,7 @@ func handleFileUpload(auditLogger security.AuditLogger, policy uploadPolicy) fib
 }
 
 func handleListFiles(policy uploadPolicy) fiber.Handler {
-	return func(c *fiber.Ctx) error {
+	return func(c fiber.Ctx) error {
 		if !policy.AllowListing {
 			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "File listing disabled"})
 		}
@@ -769,7 +771,7 @@ func handleListFiles(policy uploadPolicy) fiber.Handler {
 }
 
 func handleDownloadFile(policy uploadPolicy) fiber.Handler {
-	return func(c *fiber.Ctx) error {
+	return func(c fiber.Ctx) error {
 		if !policy.AllowDownloads {
 			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "File download disabled"})
 		}
@@ -813,7 +815,7 @@ func handleDownloadFile(policy uploadPolicy) fiber.Handler {
 }
 
 func handleSecureAsset(auditLogger security.AuditLogger) fiber.Handler {
-	return func(c *fiber.Ctx) error {
+	return func(c fiber.Ctx) error {
 		filename := c.Params("filename")
 		if filename == "" {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Filename required"})
@@ -908,11 +910,11 @@ func normalizePrefix(prefix string) string {
 	return prefix
 }
 
-func currentFingerprint(c *fiber.Ctx) string {
+func currentFingerprint(c fiber.Ctx) string {
 	if c == nil {
 		return ""
 	}
-	return security.ComputeSessionFingerprint(c.IP(), string(c.Context().UserAgent()))
+	return security.ComputeSessionFingerprint(c.IP(), string(c.RequestCtx().UserAgent()))
 }
 
 func userID(ctx *security.UserContext) string {
@@ -927,9 +929,9 @@ func handleLogon(cfg *config.ServerConfig, userAuth security.UserAuthenticator, 
 		UserID    string `json:"user_id"`
 		UserToken string `json:"user_token"`
 	}
-	return func(c *fiber.Ctx) error {
+	return func(c fiber.Ctx) error {
 		var req loginReq
-		if err := c.BodyParser(&req); err != nil {
+		if err := c.Bind().Body(&req); err != nil {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Invalid request"})
 		}
 
@@ -965,7 +967,7 @@ func handleLogon(cfg *config.ServerConfig, userAuth security.UserAuthenticator, 
 }
 
 func handleBootstrap(deps Dependencies) fiber.Handler {
-	return func(c *fiber.Ctx) error {
+	return func(c fiber.Ctx) error {
 		payload, err := BuildBrowserBootstrap(c, deps, BrowserBootstrapOptions{
 			HandshakePath: "/handshake",
 		})
@@ -976,7 +978,7 @@ func handleBootstrap(deps Dependencies) fiber.Handler {
 	}
 }
 
-func IssueAuthSession(c *fiber.Ctx, deps Dependencies, userID, deviceID string, roles []string, metadata map[string]string) (*AuthSession, error) {
+func IssueAuthSession(c fiber.Ctx, deps Dependencies, userID, deviceID string, roles []string, metadata map[string]string) (*AuthSession, error) {
 	if deps.Config == nil || deps.Authenticator == nil {
 		return nil, fmt.Errorf("auth dependencies are incomplete")
 	}
@@ -1005,7 +1007,7 @@ func IssueAuthSession(c *fiber.Ctx, deps Dependencies, userID, deviceID string, 
 	}, nil
 }
 
-func ClearAuthSession(c *fiber.Ctx, deps Dependencies) {
+func ClearAuthSession(c fiber.Ctx, deps Dependencies) {
 	if deps.Config == nil {
 		return
 	}
@@ -1035,7 +1037,7 @@ func randomCSRFToken(size int) (string, error) {
 	return base64.RawURLEncoding.EncodeToString(buf), nil
 }
 
-func setSessionCookie(c *fiber.Ctx, cfg config.SessionCookieConfig, accessToken string, auth *security.StatelessAuthenticator) {
+func setSessionCookie(c fiber.Ctx, cfg config.SessionCookieConfig, accessToken string, auth *security.StatelessAuthenticator) {
 	if c == nil || !cfg.Enabled || strings.TrimSpace(accessToken) == "" {
 		return
 	}
@@ -1055,7 +1057,7 @@ func setSessionCookie(c *fiber.Ctx, cfg config.SessionCookieConfig, accessToken 
 	})
 }
 
-func setCSRFCookie(c *fiber.Ctx, cfg config.CSRFConfig, token string) {
+func setCSRFCookie(c fiber.Ctx, cfg config.CSRFConfig, token string) {
 	if c == nil || !cfg.Enabled || strings.TrimSpace(token) == "" {
 		return
 	}
@@ -1070,7 +1072,7 @@ func setCSRFCookie(c *fiber.Ctx, cfg config.CSRFConfig, token string) {
 	})
 }
 
-func clearSessionCookie(c *fiber.Ctx, cfg config.SessionCookieConfig) {
+func clearSessionCookie(c fiber.Ctx, cfg config.SessionCookieConfig) {
 	if c == nil || !cfg.Enabled {
 		return
 	}
@@ -1087,7 +1089,7 @@ func clearSessionCookie(c *fiber.Ctx, cfg config.SessionCookieConfig) {
 	})
 }
 
-func clearCSRFCookie(c *fiber.Ctx, cfg config.CSRFConfig) {
+func clearCSRFCookie(c fiber.Ctx, cfg config.CSRFConfig) {
 	if c == nil || !cfg.Enabled {
 		return
 	}
@@ -1122,3 +1124,5 @@ func parseSameSite(raw string) string {
 		return "Lax"
 	}
 }
+
+// fiber:context-methods migrated

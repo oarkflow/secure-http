@@ -6,10 +6,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/gofiber/fiber/v2"
-	"github.com/gofiber/fiber/v2/middleware/cors"
-	"github.com/gofiber/fiber/v2/middleware/logger"
-	"github.com/gofiber/fiber/v2/middleware/recover"
+	"github.com/gofiber/fiber/v3"
+	"github.com/gofiber/fiber/v3/middleware/cors"
+	"github.com/gofiber/fiber/v3/middleware/logger"
+	"github.com/gofiber/fiber/v3/middleware/recover"
 	"github.com/oarkflow/securehttp/pkg/config"
 	"github.com/oarkflow/securehttp/pkg/security"
 	httpmw "github.com/oarkflow/securehttp/sdks/server/go/fiber/middleware"
@@ -56,7 +56,7 @@ type Runtime struct {
 func DefaultFiberConfig() fiber.Config {
 	return fiber.Config{
 		BodyLimit: 10 * 1024 * 1024,
-		ErrorHandler: func(c *fiber.Ctx, err error) error {
+		ErrorHandler: func(c fiber.Ctx, err error) error {
 			c.Response().Reset()
 			return c.SendStatus(fiber.StatusNotFound)
 		},
@@ -197,7 +197,7 @@ func (r *Runtime) ListenAddr() string {
 // GateMiddleware returns the pre-routing gate middleware.
 func (r *Runtime) GateMiddleware() fiber.Handler {
 	if r == nil || r.gate == nil {
-		return func(c *fiber.Ctx) error {
+		return func(c fiber.Ctx) error {
 			return c.SendStatus(fiber.StatusNotFound)
 		}
 	}
@@ -207,7 +207,7 @@ func (r *Runtime) GateMiddleware() fiber.Handler {
 // HandshakeHandler returns the secure handshake endpoint handler.
 func (r *Runtime) HandshakeHandler() fiber.Handler {
 	if r == nil || r.deps.CryptoMiddleware == nil {
-		return func(c *fiber.Ctx) error {
+		return func(c fiber.Ctx) error {
 			return c.SendStatus(fiber.StatusNotFound)
 		}
 	}
@@ -216,7 +216,7 @@ func (r *Runtime) HandshakeHandler() fiber.Handler {
 
 // HealthHandler returns a lightweight health check handler.
 func (r *Runtime) HealthHandler() fiber.Handler {
-	return func(c *fiber.Ctx) error {
+	return func(c fiber.Ctx) error {
 		sessions := 0
 		if r != nil && r.deps.SessionManager != nil {
 			sessions = r.deps.SessionManager.SessionCount()
@@ -306,8 +306,10 @@ func applyAppMiddleware(app *fiber.App, cfg *config.ServerConfig) {
 	app.Use(logger.New())
 
 	allowOrigins := ""
+	var allowOriginList []string
 	if cfg != nil {
 		allowOrigins = cfg.CORSAllowOrigins()
+		allowOriginList = append(allowOriginList, cfg.Gate.AllowedOrigins...)
 	}
 	if allowOrigins == "" {
 		return
@@ -321,7 +323,7 @@ func applyAppMiddleware(app *fiber.App, cfg *config.ServerConfig) {
 		}
 	}
 
-	app.Use(func(c *fiber.Ctx) error {
+	app.Use(func(c fiber.Ctx) error {
 		origin := strings.TrimSpace(c.Get("Origin"))
 		if origin != "" {
 			if _, ok := allowedOriginSet[origin]; ok {
@@ -338,9 +340,9 @@ func applyAppMiddleware(app *fiber.App, cfg *config.ServerConfig) {
 		return c.Next()
 	})
 	app.Use(cors.New(cors.Config{
-		AllowOrigins:     allowOrigins,
-		AllowMethods:     "GET,POST,PUT,DELETE,PATCH,OPTIONS",
-		AllowHeaders:     accessControlAllowHeaders(),
+		AllowOrigins:     allowOriginList,
+		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"},
+		AllowHeaders:     []string{"Origin", "Referer", "Content-Type", "Accept", "Authorization", "X-CSRF-Token", "X-Gate-Time", "X-Gate-Sign", "X-Gate-Purpose", "X-Gate-Seq", "X-Gate-Key", "X-Gate-Nonce", "X-Gate-Timestamp", "X-Gate-Signature", "X-Capability-Token", "X-Session-ID", "X-User-Token", "X-Original-Content-Type"},
 		AllowCredentials: true,
 		MaxAge:           86400,
 	}))

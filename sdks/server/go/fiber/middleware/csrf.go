@@ -4,7 +4,7 @@ import (
 	"crypto/subtle"
 	"strings"
 
-	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v3"
 	"github.com/oarkflow/securehttp/pkg/security"
 )
 
@@ -37,7 +37,7 @@ func NewCSRFMiddleware(cfg CSRFConfig) *CSRFMiddleware {
 }
 
 func (cm *CSRFMiddleware) Verify() fiber.Handler {
-	return func(c *fiber.Ctx) error {
+	return func(c fiber.Ctx) error {
 		if cm == nil || !cm.enabled || isSafeMethod(c.Method()) {
 			return c.Next()
 		}

@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v3"
 	"github.com/oarkflow/securehttp/pkg/browser"
 	"github.com/oarkflow/securehttp/pkg/config"
 	"github.com/oarkflow/securehttp/pkg/security"
@@ -23,9 +23,9 @@ type BrowserBootstrapOptions struct {
 	BaseURL             string
 	HandshakePath       string
 	CapabilityToken     string
-	ResolveUserToken    func(*fiber.Ctx) string
-	RestoreDevice       func(*fiber.Ctx, Dependencies, string) error
-	ResolveDeviceSecret func(*fiber.Ctx, Dependencies, string) (string, error)
+	ResolveUserToken    func(fiber.Ctx) string
+	RestoreDevice       func(fiber.Ctx, Dependencies, string) error
+	ResolveDeviceSecret func(fiber.Ctx, Dependencies, string) (string, error)
 }
 
 func BuildBrowserLoginResponse(cfg *config.ServerConfig, session *AuthSession, userID string, opts BrowserLoginResponseOptions) browser.LoginResponse {
@@ -54,7 +54,7 @@ func BuildBrowserLoginResponse(cfg *config.ServerConfig, session *AuthSession, u
 	return browser.BuildLoginResponse(loginOpts)
 }
 
-func BuildBrowserBootstrap(c *fiber.Ctx, deps Dependencies, opts BrowserBootstrapOptions) (*browser.BootstrapConfig, error) {
+func BuildBrowserBootstrap(c fiber.Ctx, deps Dependencies, opts BrowserBootstrapOptions) (*browser.BootstrapConfig, error) {
 	deviceID, _ := c.Locals("device_id").(string)
 	if strings.TrimSpace(deviceID) == "" {
 		return nil, fmt.Errorf("device not found")
@@ -107,7 +107,7 @@ func browserGateSecrets(cfg *config.ServerConfig) []browser.GateSecret {
 	return out
 }
 
-func resolveBootstrapUserToken(c *fiber.Ctx, resolve func(*fiber.Ctx) string) string {
+func resolveBootstrapUserToken(c fiber.Ctx, resolve func(fiber.Ctx) string) string {
 	if resolve != nil {
 		return strings.TrimSpace(resolve(c))
 	}
@@ -118,7 +118,7 @@ func resolveBootstrapUserToken(c *fiber.Ctx, resolve func(*fiber.Ctx) string) st
 	return strings.TrimSpace(claims.Metadata["user_token"])
 }
 
-func resolveBootstrapDeviceSecret(_ *fiber.Ctx, deps Dependencies, deviceID string) (string, error) {
+func resolveBootstrapDeviceSecret(_ fiber.Ctx, deps Dependencies, deviceID string) (string, error) {
 	if deps.Config != nil {
 		for i := range deps.Config.Devices {
 			if deps.Config.Devices[i].ID == deviceID && strings.TrimSpace(deps.Config.Devices[i].Secret) != "" {

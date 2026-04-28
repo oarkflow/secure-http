@@ -4,7 +4,7 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v3"
 	"github.com/oarkflow/securehttp/pkg/security"
 )
 
@@ -36,7 +36,7 @@ func NewStatelessAuthMiddlewareWithConfig(auth *security.StatelessAuthenticator,
 
 // Verify validates the JWT token and injects claims into context
 func (sam *StatelessAuthMiddleware) Verify() fiber.Handler {
-	return func(c *fiber.Ctx) error {
+	return func(c fiber.Ctx) error {
 		token, source, err := sam.resolveToken(c)
 		if err != nil {
 			return respondOpaqueAuthFailure(c)
@@ -45,7 +45,7 @@ func (sam *StatelessAuthMiddleware) Verify() fiber.Handler {
 		// Compute current fingerprint
 		fingerprint := security.ComputeSessionFingerprint(
 			c.IP(),
-			string(c.Context().UserAgent()),
+			string(c.RequestCtx().UserAgent()),
 		)
 
 		// Validate token
@@ -74,7 +74,7 @@ func (sam *StatelessAuthMiddleware) Verify() fiber.Handler {
 	}
 }
 
-func (sam *StatelessAuthMiddleware) resolveToken(c *fiber.Ctx) (string, string, error) {
+func (sam *StatelessAuthMiddleware) resolveToken(c fiber.Ctx) (string, string, error) {
 	if sam == nil || c == nil {
 		return "", "", fiber.ErrUnauthorized
 	}
@@ -101,7 +101,7 @@ func (sam *StatelessAuthMiddleware) resolveToken(c *fiber.Ctx) (string, string, 
 
 // RequireRole middleware checks if user has required role
 func (sam *StatelessAuthMiddleware) RequireRole(requiredRoles ...string) fiber.Handler {
-	return func(c *fiber.Ctx) error {
+	return func(c fiber.Ctx) error {
 		claims, ok := c.Locals("token_claims").(*security.StatelessTokenClaims)
 		if !ok || claims == nil {
 			return respondOpaqueAuthFailure(c)
@@ -125,7 +125,7 @@ func (sam *StatelessAuthMiddleware) RequireRole(requiredRoles ...string) fiber.H
 
 // RequirePermission middleware checks if user has required permission
 func (sam *StatelessAuthMiddleware) RequirePermission(requiredPerms ...string) fiber.Handler {
-	return func(c *fiber.Ctx) error {
+	return func(c fiber.Ctx) error {
 		claims, ok := c.Locals("token_claims").(*security.StatelessTokenClaims)
 		if !ok || claims == nil {
 			return respondOpaqueAuthFailure(c)
@@ -146,3 +146,5 @@ func (sam *StatelessAuthMiddleware) RequirePermission(requiredPerms ...string) f
 		return respondOpaqueAuthFailure(c)
 	}
 }
+
+// fiber:context-methods migrated

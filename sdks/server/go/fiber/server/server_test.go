@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v3"
 	"github.com/oarkflow/securehttp/pkg/config"
 	clientpkg "github.com/oarkflow/securehttp/pkg/http/client"
 	"github.com/oarkflow/securehttp/pkg/security"
@@ -81,7 +81,7 @@ func TestNewServerReusableAPI(t *testing.T) {
 	srv, err := New(Options{
 		Config: cfg,
 		RegisterAPIRoutes: func(api fiber.Router, deps Dependencies) {
-			api.Post("/echo", func(c *fiber.Ctx) error {
+			api.Post("/echo", func(c fiber.Ctx) error {
 				body, _ := c.Locals("decrypted_body").([]byte)
 				return c.JSON(fiber.Map{"echo": string(body)})
 			})
@@ -173,7 +173,7 @@ func TestRuntimeMountReusableAPI(t *testing.T) {
 	app := fiber.New(DefaultFiberConfig())
 	_, err = runtime.Mount(app, MountOptions{
 		RegisterAPIRoutes: func(api fiber.Router, deps Dependencies) {
-			api.Post("/echo", func(c *fiber.Ctx) error {
+			api.Post("/echo", func(c fiber.Ctx) error {
 				body, _ := c.Locals("decrypted_body").([]byte)
 				return c.JSON(fiber.Map{"echo": string(body)})
 			})

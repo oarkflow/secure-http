@@ -1,6 +1,6 @@
 import type { TodoItem } from '../types'
 
-import { secureHttpClient as fetch } from './secure-http'
+import { client as fetch } from './secure-fetch'
 
 export async function listTodos(): Promise<TodoItem[]> {
 	const response = await fetch.get('/api/todos')

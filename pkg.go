@@ -1,7 +1,7 @@
 package securehttp
 
 import (
-	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v3"
 	"github.com/oarkflow/securehttp/pkg/browser"
 	"github.com/oarkflow/securehttp/pkg/config"
 	httpclient "github.com/oarkflow/securehttp/pkg/http/client"
@@ -107,7 +107,7 @@ func BuildFiberBrowserLoginResponse(cfg *config.ServerConfig, session *AuthSessi
 	return httpserver.BuildBrowserLoginResponse(cfg, session, userID, opts)
 }
 
-func BuildFiberBrowserBootstrap(c *fiber.Ctx, deps ServerDependencies, opts FiberBrowserBootstrapOptions) (*BrowserBootstrapConfig, error) {
+func BuildFiberBrowserBootstrap(c fiber.Ctx, deps ServerDependencies, opts FiberBrowserBootstrapOptions) (*BrowserBootstrapConfig, error) {
 	return httpserver.BuildBrowserBootstrap(c, deps, opts)
 }
 

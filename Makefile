@@ -2,7 +2,7 @@
 
 REACT_APP_DIR := examples/react-app
 REACT_APP_WASM_DIR := $(REACT_APP_DIR)/public
-REACT_APP_WASM_RUNTIME_DIR := $(REACT_APP_DIR)/src/lib/client
+REACT_APP_WASM_RUNTIME_DIR := $(REACT_APP_DIR)/src/lib/secure-fetch
 REACT_APP_WASM_ENTRY := ./$(REACT_APP_DIR)/wasm
 REACT_APP_SERVER_ENTRY := ./$(REACT_APP_DIR)
 TODO_SERVER_CONFIG := config.dev.json

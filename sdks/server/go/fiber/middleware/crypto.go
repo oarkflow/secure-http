@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v3"
 	"github.com/oarkflow/securehttp/pkg/crypto"
 	"github.com/oarkflow/securehttp/pkg/security"
 )
@@ -82,7 +82,7 @@ func (cm *CryptoMiddleware) GetSessionManager() *crypto.SessionManager {
 
 // Decrypt middleware decrypts incoming requests
 func (cm *CryptoMiddleware) Decrypt() fiber.Handler {
-	return func(c *fiber.Ctx) error {
+	return func(c fiber.Ctx) error {
 		sessionID := c.Get(cm.headers.SessionID)
 		if sessionID == "" {
 			cm.logEvent(security.AuditEventDecryptFailure, "", "", nil, "missing session header", fmt.Errorf("missing session"))
@@ -186,11 +186,11 @@ func isSafeEmptyBodyMethod(method string) bool {
 
 // Encrypt middleware encrypts outgoing responses
 func (cm *CryptoMiddleware) Encrypt() fiber.Handler {
-	return func(c *fiber.Ctx) error {
+	return func(c fiber.Ctx) error {
 		buf := &bytes.Buffer{}
 
 		// Replace the body writer temporarily
-		c.Context().Response.SetBodyStream(buf, -1)
+		c.RequestCtx().Response.SetBodyStream(buf, -1)
 		// Call next handler
 		err := c.Next()
 		if err != nil {
@@ -198,7 +198,7 @@ func (cm *CryptoMiddleware) Encrypt() fiber.Handler {
 		}
 		// Get session from context
 		session, ok := c.Locals("session").(*crypto.Session)
-		if !ok {
+		if !ok || session == nil {
 			return respondNotFound(c)
 		}
 
@@ -237,7 +237,7 @@ func (cm *CryptoMiddleware) Encrypt() fiber.Handler {
 	}
 }
 
-func snapshotHeaders(c *fiber.Ctx, names []string) map[string]string {
+func snapshotHeaders(c fiber.Ctx, names []string) map[string]string {
 	if c == nil || len(names) == 0 {
 		return nil
 	}
@@ -253,7 +253,7 @@ func snapshotHeaders(c *fiber.Ctx, names []string) map[string]string {
 	return headers
 }
 
-func restoreHeaders(c *fiber.Ctx, headers map[string]string) {
+func restoreHeaders(c fiber.Ctx, headers map[string]string) {
 	if c == nil || len(headers) == 0 {
 		return
 	}
@@ -264,9 +264,9 @@ func restoreHeaders(c *fiber.Ctx, headers map[string]string) {
 
 // Handshake handles the key exchange
 func (cm *CryptoMiddleware) Handshake() fiber.Handler {
-	return func(c *fiber.Ctx) error {
+	return func(c fiber.Ctx) error {
 		var req crypto.HandshakeRequest
-		if err := c.BodyParser(&req); err != nil {
+		if err := c.Bind().Body(&req); err != nil {
 			cm.logEvent(security.AuditEventHandshakeFailure, "", req.DeviceID, nil, "invalid payload", err)
 			return respondNotFound(c)
 		}
@@ -370,9 +370,11 @@ func (cm *CryptoMiddleware) logEvent(eventType security.AuditEventType, sessionI
 	cm.policy.Logger.Record(evt)
 }
 
-func clientFingerprint(c *fiber.Ctx) string {
+func clientFingerprint(c fiber.Ctx) string {
 	if c == nil {
 		return ""
 	}
-	return security.ComputeSessionFingerprint(c.IP(), string(c.Context().UserAgent()))
+	return security.ComputeSessionFingerprint(c.IP(), string(c.RequestCtx().UserAgent()))
 }
+
+// fiber:context-methods migrated

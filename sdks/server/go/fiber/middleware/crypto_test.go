@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v3"
 	clientpkg "github.com/oarkflow/securehttp/pkg/http/client"
 	"github.com/oarkflow/securehttp/pkg/security"
 )
@@ -39,7 +39,7 @@ func TestCryptoMiddlewareHandshakeAndEncryptedRequest(t *testing.T) {
 	api := app.Group("/api")
 	api.Use(cm.Decrypt())
 	api.Use(cm.Encrypt())
-	api.Post("/echo", func(c *fiber.Ctx) error {
+	api.Post("/echo", func(c fiber.Ctx) error {
 		body, _ := c.Locals("decrypted_body").([]byte)
 		return c.JSON(fiber.Map{"echo": string(body)})
 	})
@@ -106,7 +106,7 @@ func TestStatelessAuthMiddlewareAcceptsCookie(t *testing.T) {
 
 	app := fiber.New()
 	sam := NewStatelessAuthMiddlewareWithConfig(auth, StatelessAuthConfig{CookieName: "securehttp_access"})
-	app.Get("/protected", sam.Verify(), func(c *fiber.Ctx) error {
+	app.Get("/protected", sam.Verify(), func(c fiber.Ctx) error {
 		return c.JSON(fiber.Map{"user_id": c.Locals("user_id")})
 	})
 
@@ -128,13 +128,13 @@ func TestCSRFMiddlewareRejectsCookieAuthWithoutHeader(t *testing.T) {
 		CookieName: "securehttp_csrf",
 		HeaderName: "X-CSRF-Token",
 	})
-	app.Post("/protected", func(c *fiber.Ctx) error {
+	app.Post("/protected", func(c fiber.Ctx) error {
 		c.Locals("auth_source", "cookie")
 		c.Locals("token_claims", &security.StatelessTokenClaims{
 			Metadata: map[string]string{"csrf_token": "csrf-1"},
 		})
 		return c.Next()
-	}, csrf.Verify(), func(c *fiber.Ctx) error {
+	}, csrf.Verify(), func(c fiber.Ctx) error {
 		return c.SendStatus(fiber.StatusOK)
 	})
 
@@ -151,7 +151,7 @@ func TestCSRFMiddlewareRejectsCookieAuthWithoutHeader(t *testing.T) {
 
 func TestOpaqueAuthFailurePreservesExistingCORSHeaders(t *testing.T) {
 	app := fiber.New()
-	app.Use(func(c *fiber.Ctx) error {
+	app.Use(func(c fiber.Ctx) error {
 		c.Set(fiber.HeaderAccessControlAllowOrigin, "http://localhost:5173")
 		c.Set(fiber.HeaderAccessControlAllowCredentials, "true")
 		return c.Next()
@@ -169,7 +169,7 @@ func TestOpaqueAuthFailurePreservesExistingCORSHeaders(t *testing.T) {
 		t.Fatalf("NewStatelessAuthenticator() error = %v", err)
 	}
 	sam := NewStatelessAuthMiddleware(auth)
-	app.Post("/auth/bootstrap", sam.Verify(), func(c *fiber.Ctx) error {
+	app.Post("/auth/bootstrap", sam.Verify(), func(c fiber.Ctx) error {
 		return c.SendStatus(fiber.StatusOK)
 	})
 
@@ -206,7 +206,7 @@ func TestStatelessAuthMiddlewareRejectsMissingTokenWithOpaqueNotFound(t *testing
 
 	app := fiber.New()
 	sam := NewStatelessAuthMiddleware(auth)
-	app.Get("/protected", sam.Verify(), func(c *fiber.Ctx) error {
+	app.Get("/protected", sam.Verify(), func(c fiber.Ctx) error {
 		return c.SendStatus(fiber.StatusOK)
 	})
 

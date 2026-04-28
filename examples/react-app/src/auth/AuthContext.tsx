@@ -15,7 +15,7 @@ import {
 
 import type { LoginCredentials, LoginResponse } from '../types'
 import { secureHttpAuthUrls, secureHttpBackendUrl } from '../lib/config'
-import { secureHttpClient } from '../lib/secure-http'
+import { client } from '../lib/secure-fetch'
 
 const sessionStore = createSessionStore({
 	storageKey: 'secure_http_react_session',
@@ -36,7 +36,7 @@ const AuthContext = createContext<AuthContextValue | null>(null)
 
 function useAuthSession() {
 	return useSecureSession({
-		client: secureHttpClient,
+		client: client,
 		loginUrl: secureHttpAuthUrls.login,
 		logoutUrl: secureHttpAuthUrls.logout,
 		restoreOnMount: false,

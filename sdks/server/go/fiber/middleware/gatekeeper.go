@@ -1,7 +1,7 @@
 package middleware
 
 import (
-	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v3"
 	"github.com/oarkflow/securehttp/pkg/security"
 )
 
@@ -17,7 +17,7 @@ func NewGateMiddleware(gate *security.Gatekeeper) *GateMiddleware {
 
 // Handle validates gate headers and short-circuits on failure.
 func (gm *GateMiddleware) Handle() fiber.Handler {
-	return func(c *fiber.Ctx) error {
+	return func(c fiber.Ctx) error {
 		if gm == nil || gm.gate == nil {
 			return respondNotFound(c)
 		}
