@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/oarkflow/securehttp/pkg/security"
+	"github.com/oarkflow/secure-http/pkg/security"
 )
 
 func TestServerConfigValidateStrictModeRejectsPlaceholders(t *testing.T) {

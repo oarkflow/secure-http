@@ -3,8 +3,8 @@ package manifest
 import (
 	"strings"
 
-	"github.com/oarkflow/securehttp/pkg/config"
-	"github.com/oarkflow/securehttp/pkg/security"
+	"github.com/oarkflow/secure-http/pkg/config"
+	"github.com/oarkflow/secure-http/pkg/security"
 )
 
 const CurrentManifestVersion = "v1"

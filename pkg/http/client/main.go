@@ -15,8 +15,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/oarkflow/securehttp/pkg/crypto"
-	"github.com/oarkflow/securehttp/pkg/security"
+	"github.com/oarkflow/secure-http/pkg/crypto"
+	"github.com/oarkflow/secure-http/pkg/security"
 )
 
 const (

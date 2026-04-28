@@ -1,4 +1,4 @@
-module github.com/oarkflow/securehttp
+module github.com/oarkflow/secure-http
 
 go 1.26.1
 

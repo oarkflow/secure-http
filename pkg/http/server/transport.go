@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	securecrypto "github.com/oarkflow/securehttp/pkg/crypto"
-	"github.com/oarkflow/securehttp/pkg/security"
+	securecrypto "github.com/oarkflow/secure-http/pkg/crypto"
+	"github.com/oarkflow/secure-http/pkg/security"
 )
 
 const MaxMessageSize = 10 * 1024 * 1024

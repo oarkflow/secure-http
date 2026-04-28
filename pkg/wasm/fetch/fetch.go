@@ -21,8 +21,8 @@ import (
 	"syscall/js"
 	"time"
 
-	"github.com/oarkflow/securehttp/pkg/browser"
-	securecrypto "github.com/oarkflow/securehttp/pkg/crypto"
+	"github.com/oarkflow/secure-http/pkg/browser"
+	securecrypto "github.com/oarkflow/secure-http/pkg/crypto"
 )
 
 const (

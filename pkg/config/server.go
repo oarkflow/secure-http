@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/oarkflow/securehttp/pkg/security"
+	"github.com/oarkflow/secure-http/pkg/security"
 )
 
 // ServerConfig represents the persisted runtime configuration.

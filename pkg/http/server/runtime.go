@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/oarkflow/securehttp/pkg/config"
-	securecrypto "github.com/oarkflow/securehttp/pkg/crypto"
-	"github.com/oarkflow/securehttp/pkg/security"
+	"github.com/oarkflow/secure-http/pkg/config"
+	securecrypto "github.com/oarkflow/secure-http/pkg/crypto"
+	"github.com/oarkflow/secure-http/pkg/security"
 )
 
 type contextKey string

@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"os"
 
-	pkgclient "github.com/oarkflow/securehttp/pkg/http/client"
-	"github.com/oarkflow/securehttp/pkg/security"
+	pkgclient "github.com/oarkflow/secure-http/pkg/http/client"
+	"github.com/oarkflow/secure-http/pkg/security"
 )
 
 // ClientConfigFile maps the JSON structure for the demo client.
