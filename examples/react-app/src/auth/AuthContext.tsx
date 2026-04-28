@@ -8,12 +8,10 @@ import {
 } from 'react'
 import {
 	useSecureSession,
-} from '../lib/react'
-import {
 	createSessionStore,
 	isSessionAuthError,
 	readCookieValue,
-} from '../lib/client'
+} from '../lib/secure-fetch'
 
 import type { LoginCredentials, LoginResponse } from '../types'
 import { secureHttpAuthUrls, secureHttpBackendUrl } from '../lib/config'

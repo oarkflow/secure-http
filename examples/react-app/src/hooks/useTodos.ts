@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { isSessionAuthError } from '../lib/client/index.js'
+import { isSessionAuthError } from '../lib/secure-fetch'
 
 import { useAuth } from '../auth/AuthContext'
 import { createTodo, deleteTodo, listTodos, updateTodo } from '../lib/todos'
