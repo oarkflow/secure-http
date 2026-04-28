@@ -12,7 +12,6 @@ import (
 	"github.com/oarkflow/securehttp/pkg/config"
 	securecrypto "github.com/oarkflow/securehttp/pkg/crypto"
 	"github.com/oarkflow/securehttp/pkg/security"
-	httpstdlib "github.com/oarkflow/securehttp/sdks/server/go/stdlib"
 )
 
 type contextKey string
@@ -48,7 +47,7 @@ type Dependencies struct {
 type Runtime struct {
 	deps       Dependencies
 	listenAddr string
-	transport  *httpstdlib.Middleware
+	transport  *Middleware
 	auth       *authMiddleware
 	csrf       *csrfMiddleware
 	cleanup    func()
@@ -131,7 +130,7 @@ func NewRuntime(opts RuntimeOptions) (*Runtime, error) {
 		Logger:            auditLogger,
 	}
 
-	transport, err := httpstdlib.New(policy)
+	transport, err := NewTransport(policy)
 	if err != nil {
 		return fail(fmt.Errorf("initialize stdlib transport: %w", err))
 	}
@@ -189,7 +188,7 @@ func (r *Runtime) GateMiddleware() func(http.Handler) http.Handler {
 	if r == nil {
 		return func(next http.Handler) http.Handler { return next }
 	}
-	return httpstdlib.GateMiddleware(r.deps.Gatekeeper)
+	return GateMiddleware(r.deps.Gatekeeper)
 }
 
 // HandshakeHandler returns the secure handshake endpoint handler.
