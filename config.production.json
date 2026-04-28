@@ -1,84 +1,84 @@
 {
-  "listen_addr": ":9443",
-  "runtime": {
-    "mode": "strict"
-  },
-  "auth": {
-    "require_device": true,
-    "require_user": true,
-    "jwt_signing_key": "prod-2026-jwt-signing-key-32-bytes-minimum-value",
-    "session_cookie": {
-      "enabled": true,
-      "name": "securehttp_access",
-      "path": "/",
-      "domain": "",
-      "http_only": true,
-      "secure": true,
-      "same_site": "lax"
-    },
-    "csrf": {
-      "enabled": true,
-      "cookie_name": "securehttp_csrf",
-      "header_name": "X-CSRF-Token",
-      "path": "/",
-      "domain": "",
-      "secure": true,
-      "same_site": "lax"
-    }
-  },
-  "gate": {
-    "max_clock_skew": "15s",
-    "nonce_ttl": "90s",
-    "allowed_origins": [
-      "https://app.example.com"
-    ],
-    "strict_origin": true,
-    "rate_limit": {
-      "window": "15s",
-      "max_hits": 20
-    },
-    "secrets": [
-      {
-        "id": "prod-2026-q2",
-        "secret": "base64:cHJvZC0yMDI2LWdhdGUtc2VjcmV0LXN0cm9uZy12YWx1ZQ==",
-        "not_before": "2026-01-01T00:00:00Z",
-        "expires_at": "2027-01-01T00:00:00Z"
-      }
-    ]
-  },
-  "capabilities": [
-    {
-      "token": "todo-cap",
-      "routes": [
-        { "path": "/handshake", "methods": [ "POST" ] },
-        { "path": "/auth/bootstrap", "methods": [ "POST" ] },
-        { "path": "/auth/logout", "methods": [ "POST" ] },
-        { "path": "/api/todos", "methods": [ "GET", "POST" ] },
-        { "path": "/api/todos/*", "methods": [ "PUT", "DELETE" ] }
-      ]
-    }
-  ],
-  "devices": [
-    { "id": "seed-device", "secret": "base64:cHJvZC1zZWVkLWRldmljZS1zZWNyZXQ=" }
-  ],
-  "users": [
-    {
-      "token": "todo-user-token-alice",
-      "id": "todo-alice",
-      "roles": [ "todo-user" ],
-      "metadata": { "username": "alice" }
-    },
-    {
-      "token": "todo-user-token-bob",
-      "id": "todo-bob",
-      "roles": [ "todo-user" ],
-      "metadata": { "username": "bob" }
-    }
-  ],
-  "alerts": {
-    "log_file": "storage/logs/todo-audit.log",
-    "webhook_url": "",
-    "min_interval": "5s",
-    "include_events": []
-  }
+	"listen_addr": ":8443",
+	"runtime": {
+		"mode": "strict"
+	},
+	"auth": {
+		"require_device": true,
+		"require_user": true,
+		"jwt_signing_key": "prod-2026-jwt-signing-key-32-bytes-minimum-value",
+		"session_cookie": {
+			"enabled": true,
+			"name": "securehttp_access",
+			"path": "/",
+			"domain": "",
+			"http_only": true,
+			"secure": true,
+			"same_site": "lax"
+		},
+		"csrf": {
+			"enabled": true,
+			"cookie_name": "securehttp_csrf",
+			"header_name": "X-CSRF-Token",
+			"path": "/",
+			"domain": "",
+			"secure": true,
+			"same_site": "lax"
+		}
+	},
+	"gate": {
+		"max_clock_skew": "15s",
+		"nonce_ttl": "90s",
+		"allowed_origins": [
+			"https://app.example.com"
+		],
+		"strict_origin": true,
+		"rate_limit": {
+			"window": "15s",
+			"max_hits": 20
+		},
+		"secrets": [
+			{
+				"id": "prod-2026-q2",
+				"secret": "base64:cHJvZC0yMDI2LWdhdGUtc2VjcmV0LXN0cm9uZy12YWx1ZQ==",
+				"not_before": "2026-01-01T00:00:00Z",
+				"expires_at": "2027-01-01T00:00:00Z"
+			}
+		]
+	},
+	"capabilities": [
+		{
+			"token": "todo-cap",
+			"routes": [
+				{ "path": "/handshake", "methods": [ "POST" ] },
+				{ "path": "/auth/bootstrap", "methods": [ "POST" ] },
+				{ "path": "/auth/logout", "methods": [ "POST" ] },
+				{ "path": "/api/todos", "methods": [ "GET", "POST" ] },
+				{ "path": "/api/todos/*", "methods": [ "PUT", "DELETE" ] }
+			]
+		}
+	],
+	"devices": [
+		{ "id": "seed-device", "secret": "base64:cHJvZC1zZWVkLWRldmljZS1zZWNyZXQ=" }
+	],
+	"users": [
+		{
+			"token": "todo-user-token-alice",
+			"id": "todo-alice",
+			"roles": [ "todo-user" ],
+			"metadata": { "username": "alice" }
+		},
+		{
+			"token": "todo-user-token-bob",
+			"id": "todo-bob",
+			"roles": [ "todo-user" ],
+			"metadata": { "username": "bob" }
+		}
+	],
+	"alerts": {
+		"log_file": "storage/logs/todo-audit.log",
+		"webhook_url": "",
+		"min_interval": "5s",
+		"include_events": [ ]
+	}
 }

@@ -7,7 +7,7 @@ restores cookie-backed auth sessions, and sends todo API requests through the WA
 ## Ports
 
 - Frontend dev server: `http://localhost:5173`
-- Backend Fiber server: `http://localhost:9443`
+- Backend Fiber server: `http://localhost:8443`
 
 The frontend talks to the backend directly. There is no Vite proxy.
 
@@ -22,7 +22,7 @@ cp .env.example .env.local
 Default value:
 
 ```env
-VITE_SECURE_HTTP_BACKEND_URL=http://localhost:9443
+VITE_SECURE_HTTP_BACKEND_URL=http://localhost:8443
 ```
 
 Use the same hostname for frontend and backend.
@@ -37,7 +37,7 @@ From the repo root:
 make run-server
 ```
 
-That target starts the Fiber backend on port `9443`.
+That target starts the Fiber backend on port `8443`.
 If you need to refresh the bundled WASM bridge first, run:
 
 ```bash
@@ -49,7 +49,7 @@ If you prefer the raw command, this is what it runs:
 ```bash
 go run ./examples/react-app \
   -config config.dev.json \
-  -addr :9443
+  -addr :8443
 ```
 
 To serve the production React build from the same Go process:
@@ -59,7 +59,7 @@ go run ./examples/react-app \
   -config config.production.json \
   -web ./examples/react-app/dist \
   -static-prefix / \
-  -addr :9443
+  -addr :8443
 ```
 
 Use `config.dev.json` for local HTTP development and `config.production.json` as the strict HTTPS deployment template.

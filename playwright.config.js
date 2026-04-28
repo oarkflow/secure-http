@@ -5,8 +5,8 @@ export default defineConfig({
     timeout: 30_000,
     webServer: [
         {
-            command: "go run ./examples/react-app -config config.dev.json -addr :9443",
-            port: 9443,
+            command: "go run ./examples/react-app -config config.dev.json -addr :8443",
+            port: 8443,
             reuseExistingServer: true,
         },
         {

@@ -48,7 +48,7 @@ test("SecureHttpClient retries recoverable session failures with refreshed csrf 
     wasmUrl: "http://localhost:5173/fetch.wasm",
     windowRef,
     labConfig: {
-      baseURL: "http://localhost:9443",
+      baseURL: "http://localhost:8443",
       bootstrapPath: "/auth/bootstrap",
       csrfCookieName: "securehttp_csrf",
       csrfToken: "stale-token",

@@ -190,7 +190,7 @@ The repo’s bundled browser example now lives under `examples/react-app`:
 
 ```bash
 make wasm
-go run ./examples/react-app -config config.dev.json -addr :9443
+go run ./examples/react-app -config config.dev.json -addr :8443
 ```
 
 If you want the Go server to host the production frontend build too, point it at `examples/react-app/dist`:
@@ -200,7 +200,7 @@ go run ./examples/react-app \
   -config config.production.json \
   -web ./examples/react-app/dist \
   -static-prefix / \
-  -addr :9443
+  -addr :8443
 ```
 
 Use [config.dev.json](/Users/sujit/Sites/secure-http/config.dev.json:1) for local HTTP development. Use [config.production.json](/Users/sujit/Sites/secure-http/config.production.json:1) as the strict HTTPS deployment template and replace the bundled secrets, users, devices, and origins before rollout.

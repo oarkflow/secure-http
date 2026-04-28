@@ -1,10 +1,10 @@
-import "./wasm_exec.js";
+import "./wasm_exec";
 
 export {
     SecureHttpClient,
     SecureClient,
     createSecureHttpClient,
-} from "./secure_http.js";
+} from "./secure_http";
 
 export {
     DEFAULT_CSRF_COOKIE_NAME,

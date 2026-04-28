@@ -1,6 +1,7 @@
-import fetchWasmUrl from './client/fetch.wasm?url'
-import { createSecureHttpClient } from './client/index.js'
+import { createSecureHttpClient } from './client'
+
+const fetchWasmUrl = `${import.meta.env.BASE_URL}fetch.wasm`
 
 export const secureHttpClient = createSecureHttpClient({
-  wasmUrl: fetchWasmUrl,
+	wasmUrl: fetchWasmUrl,
 })

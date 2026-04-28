@@ -5,3 +5,4 @@ node_modules
 .gocache
 .gomodcache
 .DS_Store
+.codex

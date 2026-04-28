@@ -44,7 +44,7 @@ const server = http.createServer(sdk.createHTTPRequestHandler({
   },
 }));
 
-server.listen(9443);
+server.listen(8443);
 ```
 
 ## Express

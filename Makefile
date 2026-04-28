@@ -1,7 +1,8 @@
 .PHONY: run run-server run-server-prod wasm wasm-go wasm-tinygo wasm-optimize patch-tinygo-wasm-exec
 
 REACT_APP_DIR := examples/react-app
-REACT_APP_WASM_DIR := $(REACT_APP_DIR)/src/lib/client
+REACT_APP_WASM_DIR := $(REACT_APP_DIR)/public
+REACT_APP_WASM_RUNTIME_DIR := $(REACT_APP_DIR)/src/lib/client
 REACT_APP_WASM_ENTRY := ./$(REACT_APP_DIR)/wasm
 REACT_APP_SERVER_ENTRY := ./$(REACT_APP_DIR)
 TODO_SERVER_CONFIG := config.dev.json
@@ -32,6 +33,7 @@ wasm:
 
 wasm-tinygo:
 	@echo "Building fetch.wasm..."
+	@mkdir -p $(REACT_APP_WASM_DIR) $(REACT_APP_WASM_RUNTIME_DIR)
 	@if ! command -v tinygo >/dev/null 2>&1; then \
 		echo "ERROR: tinygo is not installed."; \
 		exit 1; \
@@ -42,7 +44,7 @@ wasm-tinygo:
 			echo "ERROR: TinyGo wasm_exec.js not found at $(TINYGOWASM_EXEC)"; \
 			exit 1; \
 		fi; \
-		cp "$(TINYGOWASM_EXEC)" $(REACT_APP_WASM_DIR)/wasm_exec.js; \
+		cp "$(TINYGOWASM_EXEC)" $(REACT_APP_WASM_RUNTIME_DIR)/wasm_exec.js; \
 		$(MAKE) patch-tinygo-wasm-exec; \
 		echo "TinyGo WASM build complete:"; \
 		ls -lh $(REACT_APP_WASM_DIR)/fetch.wasm; \
@@ -53,6 +55,7 @@ wasm-tinygo:
 
 wasm-go:
 	@echo "TinyGo build unavailable; falling back to Go's wasm compiler."
+	@mkdir -p $(REACT_APP_WASM_DIR) $(REACT_APP_WASM_RUNTIME_DIR)
 	GOOS=js GOARCH=wasm go build -trimpath -buildvcs=false -ldflags="-s -w" -o $(REACT_APP_WASM_DIR)/fetch.wasm $(REACT_APP_WASM_ENTRY)
 	@$(MAKE) wasm-optimize
 
@@ -69,9 +72,9 @@ wasm-go:
 	fi
 
 	@echo "Found wasm_exec.js at: $(WASM_EXEC)"
-	cp "$(WASM_EXEC)" $(REACT_APP_WASM_DIR)/
+	cp "$(WASM_EXEC)" $(REACT_APP_WASM_RUNTIME_DIR)/
 
-	@echo "WASM build complete. Files in $(REACT_APP_WASM_DIR)/"
+	@echo "WASM build complete. WASM asset in $(REACT_APP_WASM_DIR)/"
 	@ls -lh $(REACT_APP_WASM_DIR)/fetch.wasm
 
 wasm-optimize:
@@ -84,14 +87,14 @@ wasm-optimize:
 	fi
 
 patch-tinygo-wasm-exec:
-	@if ! grep -q '"runtime.getRandomData"' $(REACT_APP_WASM_DIR)/wasm_exec.js; then \
-		perl -0pi -e 's/(gojs: \{\n)/$$1\t\t\t\t\t"runtime.getRandomData": (bufPtr, bufLen) => {\n\t\t\t\t\t\tcrypto.getRandomValues(loadSlice(bufPtr, bufLen));\n\t\t\t\t\t},\n/' $(REACT_APP_WASM_DIR)/wasm_exec.js; \
+	@if ! grep -q '"runtime.getRandomData"' $(REACT_APP_WASM_RUNTIME_DIR)/wasm_exec.js; then \
+		perl -0pi -e 's/(gojs: \{\n)/$$1\t\t\t\t\t"runtime.getRandomData": (bufPtr, bufLen) => {\n\t\t\t\t\t\tcrypto.getRandomValues(loadSlice(bufPtr, bufLen));\n\t\t\t\t\t},\n/' $(REACT_APP_WASM_RUNTIME_DIR)/wasm_exec.js; \
 	fi
 
 run-server:
-	@echo "Starting React demo backend on :9443..."
-	go run $(REACT_APP_SERVER_ENTRY) -config $(TODO_SERVER_CONFIG) -addr :9443
+	@echo "Starting React demo backend on :8443..."
+	go run $(REACT_APP_SERVER_ENTRY) -config $(TODO_SERVER_CONFIG) -addr :8443
 
 run-server-prod:
-	@echo "Starting React demo backend with strict production config on :9443..."
-	go run $(REACT_APP_SERVER_ENTRY) -config config.production.json -addr :9443
+	@echo "Starting React demo backend with strict production config on :8443..."
+	go run $(REACT_APP_SERVER_ENTRY) -config config.production.json -addr :8443
