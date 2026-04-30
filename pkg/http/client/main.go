@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -388,7 +389,7 @@ func (c *SecureClient) Handshake() error {
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("handshake failed with status %d: %s", resp.StatusCode, string(body))
+		return formatStatusError("handshake", http.MethodPost, c.handshakePath, resp.StatusCode, body)
 	}
 
 	if len(body) == 0 {
@@ -577,7 +578,7 @@ func (c *SecureClient) Do(method, endpoint string, data interface{}, contentType
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("request failed with status %d: %s", resp.StatusCode, string(body))
+		return nil, formatStatusError("request", method, endpoint, resp.StatusCode, body)
 	}
 
 	// Read encrypted response
@@ -612,6 +613,60 @@ func (c *SecureClient) PostJSON(endpoint string, request interface{}, response i
 	}
 
 	return nil
+}
+
+func formatStatusError(operation, method, endpoint string, status int, body []byte) error {
+	detail := strings.TrimSpace(string(body))
+	code := ""
+	if len(body) > 0 {
+		var payload map[string]any
+		if err := json.Unmarshal(body, &payload); err == nil {
+			code = stringifyPayloadField(payload["code"])
+			if parsedDetail := stringifyPayloadField(payload["detail"]); parsedDetail != "" {
+				detail = parsedDetail
+			} else if parsedError := stringifyPayloadField(payload["error"]); parsedError != "" {
+				detail = parsedError
+			}
+		}
+	}
+	if detail == "" {
+		detail = http.StatusText(status)
+	}
+	if len(detail) > 512 {
+		detail = detail[:512] + "... truncated"
+	}
+	parts := []string{
+		fmt.Sprintf("%s failed", operation),
+		fmt.Sprintf("method=%s", method),
+		fmt.Sprintf("endpoint=%s", endpoint),
+		fmt.Sprintf("status=%d", status),
+		fmt.Sprintf("status_text=%q", http.StatusText(status)),
+	}
+	if code != "" {
+		parts = append(parts, fmt.Sprintf("code=%s", code))
+	}
+	parts = append(parts, fmt.Sprintf("detail=%q", detail))
+	return errors.New(strings.Join(parts, " "))
+}
+
+func stringifyPayloadField(value any) string {
+	switch item := value.(type) {
+	case string:
+		return strings.TrimSpace(item)
+	case float64:
+		return strconv.FormatFloat(item, 'f', -1, 64)
+	case bool:
+		return strconv.FormatBool(item)
+	default:
+		if item == nil {
+			return ""
+		}
+		encoded, err := json.Marshal(item)
+		if err != nil {
+			return fmt.Sprint(item)
+		}
+		return string(encoded)
+	}
 }
 
 // UploadFile uploads a file with encryption
@@ -718,7 +773,7 @@ func (c *SecureClient) UploadFile(endpoint string, fileData []byte, filename, fi
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("request failed with status %d: %s", resp.StatusCode, string(body))
+		return nil, formatStatusError("request", http.MethodPost, endpoint, resp.StatusCode, body)
 	}
 
 	// Read encrypted response

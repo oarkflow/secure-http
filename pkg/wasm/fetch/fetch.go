@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net"
+	"net/http"
 	"strconv"
 	"strings"
 	"sync"
@@ -90,33 +91,33 @@ type gateClientConfig struct {
 }
 
 type clientConfig struct {
-	BaseURL       string
-	DeviceID      string
-	DeviceSecret  []byte
-	UserToken     string
-	HandshakePath string
-	CSRFHeader    string
-	CSRFToken     string
+	BaseURL        string
+	DeviceID       string
+	DeviceSecret   []byte
+	UserToken      string
+	HandshakePath  string
+	CSRFHeader     string
+	CSRFToken      string
 	RequestTimeout time.Duration
-	Gate          gateClientConfig
+	Gate           gateClientConfig
 }
 
 type secureClient struct {
-	baseURL       string
-	handshakePath string
-	session       *clientSession
-	deviceID      string
-	deviceSecret  []byte
-	userToken     string
-	accessToken   string
-	csrfHeader    string
-	csrfToken     string
+	baseURL        string
+	handshakePath  string
+	session        *clientSession
+	deviceID       string
+	deviceSecret   []byte
+	userToken      string
+	accessToken    string
+	csrfHeader     string
+	csrfToken      string
 	requestTimeout time.Duration
-	gateSecrets   []gateSecret
-	capability    string
-	nonceSize     int
-	rotateBefore  time.Duration
-	mu            sync.RWMutex
+	gateSecrets    []gateSecret
+	capability     string
+	nonceSize      int
+	rotateBefore   time.Duration
+	mu             sync.RWMutex
 }
 
 type clientSession struct {
@@ -155,18 +156,18 @@ func newSecureClient(cfg clientConfig) (*secureClient, error) {
 		requestTimeout = 30 * time.Second
 	}
 	return &secureClient{
-		baseURL:       strings.TrimRight(cfg.BaseURL, "/"),
-		handshakePath: handshakePath,
-		deviceID:      cfg.DeviceID,
-		deviceSecret:  secretCopy,
-		userToken:     cfg.UserToken,
-		csrfHeader:    firstNonEmpty(strings.TrimSpace(cfg.CSRFHeader), "X-CSRF-Token"),
-		csrfToken:     strings.TrimSpace(cfg.CSRFToken),
+		baseURL:        strings.TrimRight(cfg.BaseURL, "/"),
+		handshakePath:  handshakePath,
+		deviceID:       cfg.DeviceID,
+		deviceSecret:   secretCopy,
+		userToken:      cfg.UserToken,
+		csrfHeader:     firstNonEmpty(strings.TrimSpace(cfg.CSRFHeader), "X-CSRF-Token"),
+		csrfToken:      strings.TrimSpace(cfg.CSRFToken),
 		requestTimeout: requestTimeout,
-		gateSecrets:   cloneGateSecrets(cfg.Gate.Secrets),
-		capability:    strings.TrimSpace(cfg.Gate.CapabilityToken),
-		nonceSize:     nonceSize,
-		rotateBefore:  2 * time.Minute,
+		gateSecrets:    cloneGateSecrets(cfg.Gate.Secrets),
+		capability:     strings.TrimSpace(cfg.Gate.CapabilityToken),
+		nonceSize:      nonceSize,
+		rotateBefore:   2 * time.Minute,
 	}, nil
 }
 
@@ -253,7 +254,7 @@ func (c *secureClient) Handshake() error {
 		return fmt.Errorf("handshake request failed: %w", err)
 	}
 	if status != 200 {
-		return fmt.Errorf("handshake failed with status %d: %s", status, string(body))
+		return formatStatusError("handshake", methodPost, c.handshakePath, status, body)
 	}
 	if len(body) == 0 {
 		return errors.New("handshake failed: server returned empty response")
@@ -370,7 +371,7 @@ func (c *secureClient) Do(method, endpoint string, data []byte, contentType stri
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
 	if status != 200 {
-		return nil, fmt.Errorf("request failed with status %d: %s", status, string(respBody))
+		return nil, formatStatusError("request", method, endpoint, status, respBody)
 	}
 	var encResp securecrypto.EncryptedMessage
 	if err = json.Unmarshal(respBody, &encResp); err != nil {
@@ -1216,6 +1217,60 @@ func resolveResponse(data []byte, responseType string, resolve js.Value) error {
 		}
 		resolve.Invoke(parsed)
 		return nil
+	}
+}
+
+func formatStatusError(operation, method, endpoint string, status int, body []byte) error {
+	detail := strings.TrimSpace(string(body))
+	code := ""
+	if len(body) > 0 {
+		var payload map[string]any
+		if err := json.Unmarshal(body, &payload); err == nil {
+			code = stringifyPayloadField(payload["code"])
+			if parsedDetail := stringifyPayloadField(payload["detail"]); parsedDetail != "" {
+				detail = parsedDetail
+			} else if parsedError := stringifyPayloadField(payload["error"]); parsedError != "" {
+				detail = parsedError
+			}
+		}
+	}
+	if detail == "" {
+		detail = http.StatusText(status)
+	}
+	if len(detail) > 512 {
+		detail = detail[:512] + "... truncated"
+	}
+	parts := []string{
+		fmt.Sprintf("%s failed", operation),
+		fmt.Sprintf("method=%s", method),
+		fmt.Sprintf("endpoint=%s", endpoint),
+		fmt.Sprintf("status=%d", status),
+		fmt.Sprintf("status_text=%q", http.StatusText(status)),
+	}
+	if code != "" {
+		parts = append(parts, fmt.Sprintf("code=%s", code))
+	}
+	parts = append(parts, fmt.Sprintf("detail=%q", detail))
+	return errors.New(strings.Join(parts, " "))
+}
+
+func stringifyPayloadField(value any) string {
+	switch item := value.(type) {
+	case string:
+		return strings.TrimSpace(item)
+	case float64:
+		return strconv.FormatFloat(item, 'f', -1, 64)
+	case bool:
+		return strconv.FormatBool(item)
+	default:
+		if item == nil {
+			return ""
+		}
+		encoded, err := json.Marshal(item)
+		if err != nil {
+			return fmt.Sprint(item)
+		}
+		return string(encoded)
 	}
 }
 

@@ -82,13 +82,13 @@ func (m *Middleware) SessionManager() *securecrypto.SessionManager {
 func (m *Middleware) HandshakeHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if m == nil {
-			respondNotFound(w)
+			respondNotFound(w, "transport_not_configured", "secure transport middleware is not configured")
 			return
 		}
 		var req securecrypto.HandshakeRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			m.logEvent(security.AuditEventHandshakeFailure, "", req.DeviceID, nil, "invalid payload", err)
-			respondNotFound(w)
+			respondNotFound(w, "handshake_invalid_payload", err.Error())
 			return
 		}
 
@@ -101,7 +101,7 @@ func (m *Middleware) HandshakeHandler() http.Handler {
 			delta := time.Since(ts)
 			if delta > skew || delta < -skew {
 				m.logEvent(security.AuditEventHandshakeFailure, "", req.DeviceID, nil, "timestamp out of range", fmt.Errorf("timestamp skew"))
-				respondNotFound(w)
+				respondNotFound(w, "handshake_timestamp_skew", "handshake timestamp outside allowed skew")
 				return
 			}
 		}
@@ -109,13 +109,13 @@ func (m *Middleware) HandshakeHandler() http.Handler {
 		if m.policy != nil && m.policy.RequireDevice {
 			if req.DeviceID == "" || len(req.DeviceSignature) == 0 {
 				m.logEvent(security.AuditEventHandshakeFailure, "", req.DeviceID, nil, "missing device identity", fmt.Errorf("missing device"))
-				respondNotFound(w)
+				respondNotFound(w, "handshake_device_missing", "device id or device signature is missing")
 				return
 			}
 			payload := security.DeviceAuthenticationPayload(req.ClientPublicKey, req.Timestamp)
 			if err := m.policy.DeviceRegistry.Validate(req.DeviceID, req.DeviceSignature, payload); err != nil {
 				m.logEvent(security.AuditEventHandshakeFailure, "", req.DeviceID, nil, "device validation failed", err)
-				respondNotFound(w)
+				respondNotFound(w, "handshake_device_invalid", err.Error())
 				return
 			}
 		}
@@ -125,21 +125,21 @@ func (m *Middleware) HandshakeHandler() http.Handler {
 			if req.UserToken == "" {
 				if m.policy.RequireUser {
 					m.logEvent(security.AuditEventHandshakeFailure, "", req.DeviceID, nil, "missing user token", fmt.Errorf("missing user token"))
-					respondNotFound(w)
+					respondNotFound(w, "handshake_user_token_missing", "user token missing")
 					return
 				}
 			} else {
 				ctx, err := m.policy.UserAuthenticator.Validate(req.UserToken)
 				if err != nil {
 					m.logEvent(security.AuditEventHandshakeFailure, "", req.DeviceID, nil, "user token invalid", err)
-					respondNotFound(w)
+					respondNotFound(w, "handshake_user_token_invalid", err.Error())
 					return
 				}
 				userCtx = ctx
 			}
 		} else if m.policy != nil && m.policy.RequireUser {
 			m.logEvent(security.AuditEventHandshakeFailure, "", req.DeviceID, nil, "user verification disabled", fmt.Errorf("user verification disabled"))
-			respondNotFound(w)
+			respondNotFound(w, "handshake_user_verification_unavailable", "user verification is required but no authenticator is configured")
 			return
 		}
 
@@ -161,7 +161,7 @@ func (m *Middleware) HandshakeHandler() http.Handler {
 		sessionID, err := m.sessionManager.CreateSession(req.ClientPublicKey, metadata)
 		if err != nil {
 			m.logEvent(security.AuditEventHandshakeFailure, "", req.DeviceID, userCtx, "session creation failed", err)
-			respondNotFound(w)
+			respondNotFound(w, "handshake_session_create_failed", err.Error())
 			return
 		}
 
@@ -183,7 +183,7 @@ func GateMiddleware(gate *security.Gatekeeper) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if gate == nil {
-				respondNotFound(w)
+				respondNotFound(w, "gate_not_configured", "secure gate middleware is not configured")
 				return
 			}
 			capability, err := gate.Evaluate(security.GateRequest{
@@ -193,7 +193,7 @@ func GateMiddleware(gate *security.Gatekeeper) func(http.Handler) http.Handler {
 				RemoteAddr: clientIP(r),
 			})
 			if err != nil {
-				respondNotFound(w)
+				respondNotFound(w, "gate_evaluation_failed", err.Error())
 				return
 			}
 			ctx := r.Context()
@@ -209,26 +209,26 @@ func GateMiddleware(gate *security.Gatekeeper) func(http.Handler) http.Handler {
 func (m *Middleware) Decrypt(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if m == nil {
-			respondNotFound(w)
+			respondNotFound(w, "transport_not_configured", "secure transport middleware is not configured")
 			return
 		}
 		sessionID := strings.TrimSpace(r.Header.Get(m.headers.SessionID))
 		if sessionID == "" {
 			m.logEvent(security.AuditEventDecryptFailure, "", "", nil, "missing session header", fmt.Errorf("missing session"))
-			respondNotFound(w)
+			respondNotFound(w, "decrypt_missing_session_header", "missing secure session header")
 			return
 		}
 		session, ok := m.sessionManager.GetSession(sessionID)
 		if !ok {
 			m.logEvent(security.AuditEventDecryptFailure, sessionID, "", nil, "session not found", fmt.Errorf("session invalid"))
-			respondNotFound(w)
+			respondNotFound(w, "decrypt_session_not_found", "secure session not found")
 			return
 		}
 		fingerprint := clientFingerprint(r)
 		if !security.VerifySessionFingerprint(session.Metadata, fingerprint) {
 			m.sessionManager.DeleteSession(sessionID)
 			m.logEvent(security.AuditEventDecryptFailure, sessionID, session.Metadata[security.MetadataDeviceID], nil, "fingerprint mismatch", fmt.Errorf("session fingerprint mismatch"))
-			respondNotFound(w)
+			respondNotFound(w, "decrypt_fingerprint_mismatch", "secure session fingerprint mismatch")
 			return
 		}
 
@@ -239,7 +239,7 @@ func (m *Middleware) Decrypt(next http.Handler) http.Handler {
 				ctx, err := m.policy.UserAuthenticator.Validate(token)
 				if err != nil {
 					m.logEvent(security.AuditEventDecryptFailure, sessionID, session.Metadata[security.MetadataDeviceID], nil, "user token invalid", err)
-					respondNotFound(w)
+					respondNotFound(w, "decrypt_user_token_invalid", err.Error())
 					return
 				}
 				userCtx = ctx
@@ -247,13 +247,13 @@ func (m *Middleware) Decrypt(next http.Handler) http.Handler {
 				userCtx = security.ExtractUserContext(session.Metadata)
 				if userCtx == nil {
 					m.logEvent(security.AuditEventDecryptFailure, sessionID, session.Metadata[security.MetadataDeviceID], nil, "missing user token", fmt.Errorf("user token missing"))
-					respondNotFound(w)
+					respondNotFound(w, "decrypt_user_token_missing", "user token missing")
 					return
 				}
 			}
 		} else if m.policy != nil && m.policy.RequireUser {
 			m.logEvent(security.AuditEventDecryptFailure, sessionID, session.Metadata[security.MetadataDeviceID], nil, "user verification disabled", fmt.Errorf("user verification disabled"))
-			respondNotFound(w)
+			respondNotFound(w, "decrypt_user_verification_unavailable", "user verification is required but no authenticator is configured")
 			return
 		} else {
 			userCtx = security.ExtractUserContext(session.Metadata)
@@ -262,7 +262,7 @@ func (m *Middleware) Decrypt(next http.Handler) http.Handler {
 		body, err := io.ReadAll(io.LimitReader(r.Body, MaxMessageSize+1))
 		if err != nil {
 			m.logEvent(security.AuditEventDecryptFailure, sessionID, session.Metadata[security.MetadataDeviceID], userCtx, "failed to read body", err)
-			respondNotFound(w)
+			respondNotFound(w, "decrypt_read_body_failed", err.Error())
 			return
 		}
 		if len(body) == 0 {
@@ -271,25 +271,25 @@ func (m *Middleware) Decrypt(next http.Handler) http.Handler {
 				return
 			}
 			m.logEvent(security.AuditEventDecryptFailure, sessionID, session.Metadata[security.MetadataDeviceID], userCtx, "empty body", fmt.Errorf("empty body"))
-			respondNotFound(w)
+			respondNotFound(w, "decrypt_empty_body", "encrypted request body is empty")
 			return
 		}
 		if len(body) > MaxMessageSize {
 			m.logEvent(security.AuditEventDecryptFailure, sessionID, session.Metadata[security.MetadataDeviceID], userCtx, "payload too large", fmt.Errorf("payload too large"))
-			respondNotFound(w)
+			respondNotFound(w, "decrypt_payload_too_large", "encrypted request body exceeds maximum size")
 			return
 		}
 
 		var encMsg securecrypto.EncryptedMessage
 		if err := json.Unmarshal(body, &encMsg); err != nil {
 			m.logEvent(security.AuditEventDecryptFailure, sessionID, session.Metadata[security.MetadataDeviceID], userCtx, "invalid envelope", err)
-			respondNotFound(w)
+			respondNotFound(w, "decrypt_invalid_envelope", err.Error())
 			return
 		}
 		plaintext, err := session.Decrypt(&encMsg)
 		if err != nil {
 			m.logEvent(security.AuditEventDecryptFailure, sessionID, session.Metadata[security.MetadataDeviceID], userCtx, "decrypt failure", err)
-			respondNotFound(w)
+			respondNotFound(w, "decrypt_failed", err.Error())
 			return
 		}
 
@@ -458,11 +458,23 @@ func clientFingerprint(r *http.Request) string {
 	return security.ComputeSessionFingerprint(clientIP(r), r.UserAgent())
 }
 
-func respondNotFound(w http.ResponseWriter) {
+func respondNotFound(w http.ResponseWriter, details ...string) {
 	if w == nil {
 		return
 	}
-	w.WriteHeader(http.StatusNotFound)
+	code := "secure_transport_not_found"
+	detail := "secure transport request rejected"
+	if len(details) > 0 && details[0] != "" {
+		code = details[0]
+	}
+	if len(details) > 1 && details[1] != "" {
+		detail = details[1]
+	}
+	writeJSON(w, http.StatusNotFound, map[string]string{
+		"error":  "secure_transport_rejected",
+		"code":   code,
+		"detail": detail,
+	})
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {
