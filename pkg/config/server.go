@@ -21,6 +21,7 @@ type ServerConfig struct {
 	Alerts       AlertingConfig         `json:"alerts"`
 	Auth         AuthConfig             `json:"auth"`
 	Uploads      UploadConfig           `json:"uploads"`
+	Proxy        ProxyConfig            `json:"proxy"`
 }
 
 type RuntimeConfig struct {
@@ -127,6 +128,13 @@ type UploadConfig struct {
 	AllowListing   bool     `json:"allow_listing"`
 }
 
+type ProxyConfig struct {
+	TrustedCIDRs         []string `json:"trusted_cidrs"`
+	TrustForwardedHost   bool     `json:"trust_forwarded_host"`
+	ForwardedForHeader   string   `json:"forwarded_for_header"`
+	ForwardedProtoHeader string   `json:"forwarded_proto_header"`
+}
+
 // LoadServerConfig loads and validates the server configuration file.
 func LoadServerConfig(path string) (*ServerConfig, error) {
 	data, err := os.ReadFile(path)
@@ -145,6 +153,9 @@ func LoadServerConfig(path string) (*ServerConfig, error) {
 		cfg.Auth.RequireUser = true
 	}
 	cfg.normalize()
+	if err := cfg.resolveSecrets(); err != nil {
+		return nil, err
+	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -210,6 +221,12 @@ func (cfg *ServerConfig) normalize() {
 	if cfg.Auth.CSRF.SameSite == "" {
 		cfg.Auth.CSRF.SameSite = "lax"
 	}
+	if strings.TrimSpace(cfg.Proxy.ForwardedForHeader) == "" {
+		cfg.Proxy.ForwardedForHeader = "X-Forwarded-For"
+	}
+	if strings.TrimSpace(cfg.Proxy.ForwardedProtoHeader) == "" {
+		cfg.Proxy.ForwardedProtoHeader = "X-Forwarded-Proto"
+	}
 }
 
 func (cfg *ServerConfig) IsStrictMode() bool {
@@ -225,17 +242,27 @@ func (cfg *ServerConfig) Validate() error {
 		return fmt.Errorf("server config is nil")
 	}
 	if cfg.IsStrictMode() {
-		if looksLikePlaceholderSecret(cfg.Auth.JWTSigningKey) {
-			return fmt.Errorf("strict mode requires a non-placeholder auth.jwt_signing_key")
+		if err := validateStrictSecret("auth.jwt_signing_key", cfg.Auth.JWTSigningKey); err != nil {
+			return err
 		}
 		for _, secret := range cfg.Gate.Secrets {
-			if looksLikePlaceholderSecret(secret.Material) {
-				return fmt.Errorf("strict mode requires a non-placeholder gate secret for %s", secret.ID)
+			if err := validateStrictSecret("gate secret "+secret.ID, secret.Material); err != nil {
+				return err
 			}
 		}
 		for _, device := range cfg.Devices {
-			if looksLikePlaceholderSecret(device.Secret) {
-				return fmt.Errorf("strict mode requires non-placeholder device secret for %s", device.ID)
+			if err := validateStrictSecret("device secret "+device.ID, device.Secret); err != nil {
+				return err
+			}
+		}
+		for _, capability := range cfg.Capabilities {
+			if err := validateStrictSecret("capability token", capability.Token); err != nil {
+				return err
+			}
+		}
+		for _, user := range cfg.Users {
+			if err := validateStrictSecret("user token "+user.ID, user.Token); err != nil {
+				return err
 			}
 		}
 		if len(cfg.Gate.AllowedOrigins) == 0 {
@@ -265,6 +292,51 @@ func (cfg *ServerConfig) Validate() error {
 		if strings.EqualFold(strings.TrimSpace(cfg.Auth.CSRF.SameSite), "none") && !cfg.Auth.CSRF.Secure {
 			return fmt.Errorf("auth.csrf.same_site=none requires auth.csrf.secure=true")
 		}
+	}
+	return nil
+}
+
+func (cfg *ServerConfig) resolveSecrets() error {
+	if cfg == nil {
+		return nil
+	}
+	var err error
+	if cfg.Auth.JWTSigningKey, err = resolveSecretReference(cfg.Auth.JWTSigningKey); err != nil {
+		return fmt.Errorf("auth.jwt_signing_key: %w", err)
+	}
+	for i := range cfg.Gate.Secrets {
+		if cfg.Gate.Secrets[i].Material, err = resolveSecretReference(cfg.Gate.Secrets[i].Material); err != nil {
+			return fmt.Errorf("gate secret %s: %w", cfg.Gate.Secrets[i].ID, err)
+		}
+	}
+	for i := range cfg.Devices {
+		if cfg.Devices[i].Secret, err = resolveSecretReference(cfg.Devices[i].Secret); err != nil {
+			return fmt.Errorf("device %s: %w", cfg.Devices[i].ID, err)
+		}
+	}
+	for i := range cfg.Capabilities {
+		if cfg.Capabilities[i].Token, err = resolveSecretReference(cfg.Capabilities[i].Token); err != nil {
+			return fmt.Errorf("capability token: %w", err)
+		}
+	}
+	for i := range cfg.Users {
+		if cfg.Users[i].Token, err = resolveSecretReference(cfg.Users[i].Token); err != nil {
+			return fmt.Errorf("user token %s: %w", cfg.Users[i].ID, err)
+		}
+	}
+	return nil
+}
+
+func validateStrictSecret(name, value string) error {
+	if looksLikePlaceholderSecret(value) {
+		return fmt.Errorf("strict mode requires a non-placeholder %s", name)
+	}
+	material, err := decodeKeyMaterial(value)
+	if err != nil {
+		return fmt.Errorf("%s: %w", name, err)
+	}
+	if len(material) < 32 {
+		return fmt.Errorf("strict mode requires %s to contain at least 32 bytes of key material", name)
 	}
 	return nil
 }

@@ -210,7 +210,14 @@ type SecurityPolicy struct {
 	MaxClockSkew      time.Duration
 	SessionTTL        time.Duration
 	MessageTTL        time.Duration
+	OpaqueErrors      bool
+	TrustedProxy      TrustedProxyConfig
 	Logger            AuditLogger
+}
+
+type TrustedProxyConfig struct {
+	TrustedCIDRs       []string
+	ForwardedForHeader string
 }
 
 // DefaultSecurityPolicy returns a policy with no device/user requirements.
@@ -468,6 +475,62 @@ func ComputeSessionFingerprint(ip, userAgent string) string {
 	composite := normalizeFingerprintIP(ip) + "|" + strings.TrimSpace(userAgent)
 	sum := sha256.Sum256([]byte(composite))
 	return hex.EncodeToString(sum[:])
+}
+
+func ResolveClientIP(remoteAddr, forwardedFor string, cfg TrustedProxyConfig) string {
+	remoteIP := normalizeRemoteIP(remoteAddr)
+	if remoteIP == "" {
+		return ""
+	}
+	if !isTrustedProxy(remoteIP, cfg.TrustedCIDRs) {
+		return remoteIP
+	}
+	for _, part := range strings.Split(forwardedFor, ",") {
+		candidate := strings.TrimSpace(part)
+		if parsed := net.ParseIP(candidate); parsed != nil {
+			return parsed.String()
+		}
+	}
+	return remoteIP
+}
+
+func normalizeRemoteIP(remoteAddr string) string {
+	trimmed := strings.TrimSpace(remoteAddr)
+	if trimmed == "" {
+		return ""
+	}
+	if host, _, err := net.SplitHostPort(trimmed); err == nil {
+		trimmed = host
+	}
+	trimmed = strings.Trim(trimmed, "[]")
+	if parsed := net.ParseIP(trimmed); parsed != nil {
+		return parsed.String()
+	}
+	return trimmed
+}
+
+func isTrustedProxy(ip string, cidrs []string) bool {
+	if len(cidrs) == 0 {
+		return false
+	}
+	parsed := net.ParseIP(strings.TrimSpace(ip))
+	if parsed == nil {
+		return false
+	}
+	for _, raw := range cidrs {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
+		}
+		if candidate := net.ParseIP(raw); candidate != nil && candidate.Equal(parsed) {
+			return true
+		}
+		_, network, err := net.ParseCIDR(raw)
+		if err == nil && network.Contains(parsed) {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeFingerprintIP(ip string) string {

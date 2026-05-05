@@ -4,9 +4,7 @@ This package exposes the secure HTTP client over WebAssembly so that browsers ca
 
 ## Building the module
 
-```bash
-GOOS=js GOARCH=wasm go build -o securefetch.wasm ./cmd/securefetchwasm
-```
+This package is library code. The browser demo and build wrapper live in `github.com/oarkflow/secure-go` under `examples/react-app`.
 
 Load Go's runtime JavaScript shim before instantiating the module:
 
@@ -55,30 +53,4 @@ Concurrent calls to `secureFetch` share the same session and the middleware guar
 
 ## Browser demo client
 
-The folder `web/securefetch-demo` contains a minimal UI that wires `secureFetchInit`, `secureFetch`, `secureFetchHandshake`, and `secureFetchReset` exactly as documented above. To run it:
-
-1. Build the WASM binary and copy it into the demo directory:
-
-  ```bash
-  GOOS=js GOARCH=wasm go build -o web/securefetch-demo/securefetch.wasm ./cmd/securefetchwasm
-  ```
-
-2. Copy Go's runtime shim next to the HTML file (once per Go install):
-
-  ```bash
-  cp "$(go env GOROOT)/misc/wasm/wasm_exec.js" web/securefetch-demo/
-  ```
-
-3. Serve the folder with any static server (Vite, `python -m http.server`, nginx, etc.) and open it in a browser that supports WebAssembly.
-
-### Serve with Go
-
-Prefer to keep everything Go-native? Use the bundled helper:
-
-```bash
-go run ./cmd/securefetchweb -addr :8082 -dir web/securefetch-demo
-```
-
-It automatically registers the correct MIME type for `securefetch.wasm`, adds handy request logging, and (optionally) enables permissive CORS for local development.
-
-Within the UI you can pick how the device secret is provided—plain string, automatic `base64:` prefix, or a `Uint8Array` derived from comma-separated byte values—matching the capabilities of the underlying WASM bridge.
+Use `github.com/oarkflow/secure-go/examples/react-app` for the maintained browser demo. That project builds the WASM entrypoint, copies `wasm_exec.js`, and runs the React/Vite demo against the Go SDK.

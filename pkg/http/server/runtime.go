@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/subtle"
 	"fmt"
-	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -127,7 +126,12 @@ func NewRuntime(opts RuntimeOptions) (*Runtime, error) {
 		RequireUser:       cfg.Auth.RequireUser,
 		DeviceRegistry:    deviceRegistry,
 		UserAuthenticator: userAuth,
-		Logger:            auditLogger,
+		OpaqueErrors:      cfg.IsStrictMode(),
+		TrustedProxy: security.TrustedProxyConfig{
+			TrustedCIDRs:       append([]string{}, cfg.Proxy.TrustedCIDRs...),
+			ForwardedForHeader: cfg.Proxy.ForwardedForHeader,
+		},
+		Logger: auditLogger,
 	}
 
 	transport, err := NewTransport(policy)
@@ -157,6 +161,10 @@ func NewRuntime(opts RuntimeOptions) (*Runtime, error) {
 		auth: &authMiddleware{
 			auth:       statelessAuth,
 			cookieName: cfg.Auth.SessionCookie.Name,
+			proxy: security.TrustedProxyConfig{
+				TrustedCIDRs:       append([]string{}, cfg.Proxy.TrustedCIDRs...),
+				ForwardedForHeader: cfg.Proxy.ForwardedForHeader,
+			},
 		},
 		csrf: &csrfMiddleware{
 			enabled:    cfg.Auth.CSRF.Enabled,
@@ -188,7 +196,13 @@ func (r *Runtime) GateMiddleware() func(http.Handler) http.Handler {
 	if r == nil {
 		return func(next http.Handler) http.Handler { return next }
 	}
-	return GateMiddleware(r.deps.Gatekeeper)
+	return GateMiddlewareWithOptions(r.deps.Gatekeeper, GateMiddlewareOptions{
+		TrustedProxy: security.TrustedProxyConfig{
+			TrustedCIDRs:       append([]string{}, r.deps.Config.Proxy.TrustedCIDRs...),
+			ForwardedForHeader: r.deps.Config.Proxy.ForwardedForHeader,
+		},
+		OpaqueErrors: r.deps.Config.IsStrictMode(),
+	})
 }
 
 // HandshakeHandler returns the secure handshake endpoint handler.
@@ -273,6 +287,7 @@ func UserContextFromRequest(r *http.Request) *security.UserContext {
 type authMiddleware struct {
 	auth       *security.StatelessAuthenticator
 	cookieName string
+	proxy      security.TrustedProxyConfig
 }
 
 func (m *authMiddleware) Verify(next http.Handler) http.Handler {
@@ -283,7 +298,7 @@ func (m *authMiddleware) Verify(next http.Handler) http.Handler {
 			return
 		}
 
-		fingerprint := security.ComputeSessionFingerprint(clientIP(r), r.UserAgent())
+		fingerprint := security.ComputeSessionFingerprint(clientIPWithProxy(r, m.proxy), r.UserAgent())
 		claims, err := m.auth.ValidateToken(token, "access", fingerprint)
 		if err != nil {
 			http.NotFound(w, r)
@@ -394,19 +409,18 @@ func isSafeMethod(method string) bool {
 }
 
 func clientIP(r *http.Request) string {
+	return clientIPWithProxy(r, security.TrustedProxyConfig{})
+}
+
+func clientIPWithProxy(r *http.Request, proxy security.TrustedProxyConfig) string {
 	if r == nil {
 		return ""
 	}
-	if forwarded := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); forwarded != "" {
-		parts := strings.Split(forwarded, ",")
-		if len(parts) > 0 {
-			return strings.TrimSpace(parts[0])
-		}
+	headerName := strings.TrimSpace(proxy.ForwardedForHeader)
+	if headerName == "" {
+		headerName = "X-Forwarded-For"
 	}
-	if host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr)); err == nil {
-		return host
-	}
-	return strings.TrimSpace(r.RemoteAddr)
+	return security.ResolveClientIP(r.RemoteAddr, r.Header.Get(headerName), proxy)
 }
 
 func copyStringMap(src map[string]string) map[string]string {

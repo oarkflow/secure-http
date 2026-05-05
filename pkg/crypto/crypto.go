@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/sha512"
+	"encoding/base64"
 	"encoding/binary"
 	"errors"
 	"io"
@@ -25,6 +26,8 @@ const (
 	DefaultMessageTTL = 5 * time.Minute
 )
 
+var ErrMessageReplay = errors.New("message replay detected")
+
 // Session stores encryption keys and metadata
 type Session struct {
 	SharedSecret []byte
@@ -36,6 +39,7 @@ type Session struct {
 	Metadata     map[string]string
 	SessionTTL   time.Duration
 	MessageTTL   time.Duration
+	SeenMessages map[string]time.Time
 	mu           sync.Mutex
 }
 
@@ -147,15 +151,22 @@ func (s *Session) Encrypt(plaintext []byte) (*EncryptedMessage, error) {
 	}
 
 	// Compute HMAC over nonce + ciphertext + timestamp
-	data := append(msg.Nonce, msg.Ciphertext...)
-	timestampBytes := make([]byte, 8)
-	binary.BigEndian.PutUint64(timestampBytes, uint64(timestamp))
-	data = append(data, timestampBytes...)
+	data := messageAuthenticationData(msg.Nonce, msg.Ciphertext, timestamp)
 	msg.HMAC = ComputeHMAC(s.MacKey, data)
 
 	s.LastUsed = time.Now()
 	s.Nonce++
 	return msg, nil
+}
+
+func messageAuthenticationData(nonce, ciphertext []byte, timestamp int64) []byte {
+	data := make([]byte, 0, len(nonce)+len(ciphertext)+8)
+	data = append(data, nonce...)
+	data = append(data, ciphertext...)
+	timestampBytes := make([]byte, 8)
+	binary.BigEndian.PutUint64(timestampBytes, uint64(timestamp))
+	data = append(data, timestampBytes...)
+	return data
 }
 
 // Decrypt decrypts and verifies message
@@ -175,13 +186,13 @@ func (s *Session) Decrypt(msg *EncryptedMessage) ([]byte, error) {
 	}
 
 	// Verify HMAC
-	data := append(msg.Nonce, msg.Ciphertext...)
-	timestampBytes := make([]byte, 8)
-	binary.BigEndian.PutUint64(timestampBytes, uint64(msg.Timestamp))
-	data = append(data, timestampBytes...)
+	data := messageAuthenticationData(msg.Nonce, msg.Ciphertext, msg.Timestamp)
 
 	if !VerifyHMAC(s.MacKey, data, msg.HMAC) {
 		return nil, errors.New("HMAC verification failed")
+	}
+	if s.messageSeenLocked(msg, msgWindow) {
+		return nil, ErrMessageReplay
 	}
 
 	// Decrypt with AES-GCM
@@ -202,6 +213,31 @@ func (s *Session) Decrypt(msg *EncryptedMessage) ([]byte, error) {
 
 	s.LastUsed = time.Now()
 	return plaintext, nil
+}
+
+func (s *Session) messageSeenLocked(msg *EncryptedMessage, ttl time.Duration) bool {
+	if msg == nil || len(msg.Nonce) == 0 {
+		return true
+	}
+	if ttl <= 0 {
+		ttl = DefaultMessageTTL
+	}
+	now := time.Now()
+	if s.SeenMessages == nil {
+		s.SeenMessages = make(map[string]time.Time)
+	}
+	cutoff := now.Add(-ttl)
+	for key, seenAt := range s.SeenMessages {
+		if seenAt.Before(cutoff) {
+			delete(s.SeenMessages, key)
+		}
+	}
+	key := base64.StdEncoding.EncodeToString(msg.Nonce)
+	if _, exists := s.SeenMessages[key]; exists {
+		return true
+	}
+	s.SeenMessages[key] = now
+	return false
 }
 
 // IsExpired checks if session has expired

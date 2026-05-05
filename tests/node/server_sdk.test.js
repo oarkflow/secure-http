@@ -189,6 +189,155 @@ test("Node server SDK completes handshake and encrypted request flow", async () 
   }
 });
 
+test("Node server SDK rejects missing gate headers", async () => {
+  const { handler } = createFixture();
+  const response = await dispatch(handler, {
+    method: "POST",
+    path: "/api/echo",
+    headers: { "content-type": "application/json" },
+    body: "{}",
+  });
+  assert.equal(response.statusCode, 404);
+  assert.deepEqual(JSON.parse(response.body.toString("utf8")), { error: "not_found" });
+});
+
+test("Node server SDK rejects bad device signatures", async () => {
+  const { handler, gateSecret } = createFixture();
+  const clientECDH = crypto.createECDH("prime256v1");
+  clientECDH.generateKeys();
+  const timestamp = Math.floor(Date.now() / 1000);
+  const handshakeRequest = {
+    client_public_key: clientECDH.getPublicKey().toString("base64"),
+    device_id: "device-1",
+    device_signature: computeHMAC(Buffer.from("wrong-secret"), Buffer.concat([clientECDH.getPublicKey(), uint64BE(timestamp)])).toString("base64"),
+    user_token: "user-token-1",
+    timestamp,
+  };
+  const response = await dispatch(handler, {
+    method: "POST",
+    path: "/handshake",
+    headers: {
+      "content-type": "application/json",
+      ...lowercaseKeys(gateHeaders({ method: "POST", path: "/handshake", capability: "cap-root", gateSecretID: "gate-1", gateSecret })),
+    },
+    body: JSON.stringify(handshakeRequest),
+  });
+  assert.equal(response.statusCode, 404);
+});
+
+test("Node server SDK rejects encrypted request replay", async () => {
+  const { handler, gateSecret } = createFixture();
+  const { sessionID, encKey, macKey } = await completeHandshake(handler, gateSecret);
+  const encryptedRequest = encryptMessage(encKey, macKey, Buffer.from(JSON.stringify({ hello: "again" }), "utf8"));
+  const request = {
+    method: "POST",
+    path: "/api/echo",
+    headers: {
+      "content-type": "application/octet-stream",
+      "x-session-id": sessionID,
+      "x-user-token": "user-token-1",
+    },
+    body: JSON.stringify(encryptedRequest),
+  };
+  const first = await dispatch(handler, {
+    ...request,
+    headers: {
+      ...request.headers,
+      ...lowercaseKeys(gateHeaders({ method: "POST", path: "/api/echo", capability: "cap-root", gateSecretID: "gate-1", gateSecret })),
+    },
+  });
+  assert.equal(first.statusCode, 200);
+  const replay = await dispatch(handler, {
+    ...request,
+    headers: {
+      ...request.headers,
+      ...lowercaseKeys(gateHeaders({ method: "POST", path: "/api/echo", capability: "cap-root", gateSecretID: "gate-1", gateSecret })),
+    },
+  });
+  assert.equal(replay.statusCode, 404);
+});
+
+test("Node server SDK rejects invalid user token", async () => {
+  const { handler, gateSecret } = createFixture();
+  const { sessionID, encKey, macKey } = await completeHandshake(handler, gateSecret);
+  const encryptedRequest = encryptMessage(encKey, macKey, Buffer.from(JSON.stringify({ hello: "world" }), "utf8"));
+  const response = await dispatch(handler, {
+    method: "POST",
+    path: "/api/echo",
+    headers: {
+      "content-type": "application/octet-stream",
+      "x-session-id": sessionID,
+      "x-user-token": "wrong-user-token",
+      ...lowercaseKeys(gateHeaders({ method: "POST", path: "/api/echo", capability: "cap-root", gateSecretID: "gate-1", gateSecret })),
+    },
+    body: JSON.stringify(encryptedRequest),
+  });
+  assert.equal(response.statusCode, 404);
+});
+
+function createFixture() {
+  const gateSecret = Buffer.from("gate-secret-1");
+  const deviceSecret = Buffer.from("device-secret-1");
+  const sdk = new SecureHttpServerSDK({
+    handshakePath: "/handshake",
+    requireDevice: true,
+    requireUser: true,
+    gateSecrets: [{ id: "gate-1", secret: gateSecret }],
+    gateSecretStrings: { "gate-1": "base64:Z2F0ZS1zZWNyZXQtMQ==" },
+    deviceSecrets: { "device-1": deviceSecret },
+    deviceSecretStrings: { "device-1": "base64:ZGV2aWNlLXNlY3JldC0x" },
+    capabilities: [
+      {
+        token: "cap-root",
+        routes: [
+          { path: "/handshake", methods: ["POST"] },
+          { path: "/api/echo", methods: ["POST"] },
+        ],
+      },
+    ],
+    async userAuthenticator(token) {
+      return token === "user-token-1" ? { id: "user-1", roles: ["admin"] } : null;
+    },
+  });
+  const handler = sdk.createHTTPRequestHandler({
+    secure: {
+      "POST /api/echo": async ({ json }) => ({ ok: true, payload: json() }),
+    },
+  });
+  return { sdk, handler, gateSecret, deviceSecret };
+}
+
+async function completeHandshake(handler, gateSecret) {
+  const deviceSecret = Buffer.from("device-secret-1");
+  const clientECDH = crypto.createECDH("prime256v1");
+  clientECDH.generateKeys();
+  const timestamp = Math.floor(Date.now() / 1000);
+  const handshakeRequest = {
+    client_public_key: clientECDH.getPublicKey().toString("base64"),
+    device_id: "device-1",
+    device_signature: computeHMAC(deviceSecret, Buffer.concat([clientECDH.getPublicKey(), uint64BE(timestamp)])).toString("base64"),
+    user_token: "user-token-1",
+    timestamp,
+  };
+  const response = await dispatch(handler, {
+    method: "POST",
+    path: "/handshake",
+    headers: {
+      "content-type": "application/json",
+      ...lowercaseKeys(gateHeaders({ method: "POST", path: "/handshake", capability: "cap-root", gateSecretID: "gate-1", gateSecret })),
+    },
+    body: JSON.stringify(handshakeRequest),
+  });
+  assert.equal(response.statusCode, 200);
+  const handshakeBody = JSON.parse(response.body.toString("utf8"));
+  const serverPublicKey = Buffer.from(handshakeBody.server_public_key, "base64");
+  const sharedSecret = clientECDH.computeSecret(serverPublicKey);
+  return {
+    sessionID: Buffer.from(handshakeBody.session_id, "base64").toString("utf8"),
+    ...deriveKeys(sharedSecret),
+  };
+}
+
 function lowercaseKeys(headers) {
   return Object.fromEntries(Object.entries(headers).map(([key, value]) => [key.toLowerCase(), value]));
 }

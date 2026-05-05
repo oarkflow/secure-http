@@ -6,7 +6,7 @@
 	"auth": {
 		"require_device": true,
 		"require_user": true,
-		"jwt_signing_key": "prod-2026-jwt-signing-key-32-bytes-minimum-value",
+		"jwt_signing_key": "env:SECURE_HTTP_JWT_SIGNING_KEY",
 		"session_cookie": {
 			"enabled": true,
 			"name": "securehttp_access",
@@ -40,7 +40,7 @@
 		"secrets": [
 			{
 				"id": "prod-2026-q2",
-				"secret": "base64:cHJvZC0yMDI2LWdhdGUtc2VjcmV0LXN0cm9uZy12YWx1ZQ==",
+				"secret": "env:SECURE_HTTP_GATE_SECRET_Q2",
 				"not_before": "2026-01-01T00:00:00Z",
 				"expires_at": "2027-01-01T00:00:00Z"
 			}
@@ -48,7 +48,7 @@
 	},
 	"capabilities": [
 		{
-			"token": "todo-cap",
+			"token": "env:SECURE_HTTP_TODO_CAPABILITY_TOKEN",
 			"routes": [
 				{ "path": "/handshake", "methods": [ "POST" ] },
 				{ "path": "/auth/bootstrap", "methods": [ "POST" ] },
@@ -59,17 +59,17 @@
 		}
 	],
 	"devices": [
-		{ "id": "seed-device", "secret": "base64:cHJvZC1zZWVkLWRldmljZS1zZWNyZXQ=" }
+		{ "id": "seed-device", "secret": "env:SECURE_HTTP_SEED_DEVICE_SECRET" }
 	],
 	"users": [
 		{
-			"token": "todo-user-token-alice",
+			"token": "env:SECURE_HTTP_USER_TOKEN_ALICE",
 			"id": "todo-alice",
 			"roles": [ "todo-user" ],
 			"metadata": { "username": "alice" }
 		},
 		{
-			"token": "todo-user-token-bob",
+			"token": "env:SECURE_HTTP_USER_TOKEN_BOB",
 			"id": "todo-bob",
 			"roles": [ "todo-user" ],
 			"metadata": { "username": "bob" }
@@ -80,5 +80,10 @@
 		"webhook_url": "",
 		"min_interval": "5s",
 		"include_events": [ ]
+	},
+	"proxy": {
+		"trusted_cidrs": [],
+		"forwarded_for_header": "X-Forwarded-For",
+		"forwarded_proto_header": "X-Forwarded-Proto"
 	}
 }

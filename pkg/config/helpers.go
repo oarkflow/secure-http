@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 )
@@ -16,10 +17,17 @@ var insecureSecretMarkers = []string{
 	"changeme",
 	"replace-me",
 	"test-secret",
+	"sample",
+	"seed-",
+	"prod-",
+	"todo-",
 }
 
 func decodeKeyMaterial(input string) ([]byte, error) {
-	trimmed := strings.TrimSpace(input)
+	trimmed, err := resolveSecretReference(input)
+	if err != nil {
+		return nil, err
+	}
 	if trimmed == "" {
 		return nil, fmt.Errorf("secret value is empty")
 	}
@@ -39,6 +47,25 @@ func decodeKeyMaterial(input string) ([]byte, error) {
 	default:
 		return []byte(trimmed), nil
 	}
+}
+
+func resolveSecretReference(input string) (string, error) {
+	trimmed := strings.TrimSpace(input)
+	if trimmed == "" {
+		return "", nil
+	}
+	if !strings.HasPrefix(trimmed, "env:") {
+		return trimmed, nil
+	}
+	name := strings.TrimSpace(strings.TrimPrefix(trimmed, "env:"))
+	if name == "" {
+		return "", fmt.Errorf("env secret reference is missing a variable name")
+	}
+	value, ok := os.LookupEnv(name)
+	if !ok || strings.TrimSpace(value) == "" {
+		return "", fmt.Errorf("env secret %s is not set", name)
+	}
+	return strings.TrimSpace(value), nil
 }
 
 func parseDuration(value string, fallback time.Duration) (time.Duration, error) {

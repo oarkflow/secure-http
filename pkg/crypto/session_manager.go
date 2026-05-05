@@ -87,6 +87,7 @@ func (sm *SessionManager) CreateSession(clientPublicKey []byte, metadata map[str
 		Metadata:     cloneMetadata(metadata),
 		SessionTTL:   sm.config.SessionTimeout,
 		MessageTTL:   sm.config.MessageTTL,
+		SeenMessages: make(map[string]time.Time),
 	}
 
 	// Generate session ID
