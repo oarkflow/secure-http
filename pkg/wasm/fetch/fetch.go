@@ -833,7 +833,7 @@ func hydrateBootstrapConfig(cfg wasmConfig) (wasmConfig, error) {
 		return cfg, fmt.Errorf("bootstrap request failed: %w", err)
 	}
 	if status != 200 {
-		return cfg, fmt.Errorf("bootstrap failed with status %d: %s", status, strings.TrimSpace(string(body)))
+		return cfg, formatStatusError("bootstrap", methodPost, normalizeEndpoint(cfg.bootstrapPath), status, body)
 	}
 
 	var payload browser.BootstrapConfig
@@ -1220,6 +1220,23 @@ func resolveResponse(data []byte, responseType string, resolve js.Value) error {
 	}
 }
 
+type statusError struct {
+	operation string
+	method    string
+	endpoint  string
+	status    int
+	code      string
+	detail    string
+	message   string
+}
+
+func (e *statusError) Error() string {
+	if e == nil {
+		return ""
+	}
+	return e.message
+}
+
 func formatStatusError(operation, method, endpoint string, status int, body []byte) error {
 	detail := strings.TrimSpace(string(body))
 	code := ""
@@ -1251,7 +1268,15 @@ func formatStatusError(operation, method, endpoint string, status int, body []by
 		parts = append(parts, fmt.Sprintf("code=%s", code))
 	}
 	parts = append(parts, fmt.Sprintf("detail=%q", detail))
-	return errors.New(strings.Join(parts, " "))
+	return &statusError{
+		operation: operation,
+		method:    method,
+		endpoint:  endpoint,
+		status:    status,
+		code:      code,
+		detail:    detail,
+		message:   strings.Join(parts, " "),
+	}
 }
 
 func stringifyPayloadField(value any) string {
@@ -1335,7 +1360,17 @@ func rejectError(reject js.Value, err error) {
 		return
 	}
 	if errorCtor.Truthy() {
-		reject.Invoke(errorCtor.New(err.Error()))
+		jsErr := errorCtor.New(err.Error())
+		var statusErr *statusError
+		if errors.As(err, &statusErr) && statusErr != nil {
+			jsErr.Set("phase", statusErr.operation)
+			jsErr.Set("method", statusErr.method)
+			jsErr.Set("endpoint", statusErr.endpoint)
+			jsErr.Set("status", statusErr.status)
+			jsErr.Set("code", statusErr.code)
+			jsErr.Set("detail", statusErr.detail)
+		}
+		reject.Invoke(jsErr)
 		return
 	}
 	reject.Invoke(err.Error())
