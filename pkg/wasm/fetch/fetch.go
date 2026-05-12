@@ -40,6 +40,8 @@ const (
 type wasmState struct {
 	mu               sync.RWMutex
 	client           *secureClient
+	initRunning      bool
+	initWaiters      []chan error
 	handshakeRunning bool
 	waiters          []chan error
 }
@@ -556,24 +558,57 @@ func (s *wasmState) registerCallbacks() {
 
 func (s *wasmState) init(this js.Value, args []js.Value) any {
 	return newPromise(func(resolve, reject js.Value) {
+		s.mu.Lock()
+		if s.initRunning {
+			wait := make(chan error, 1)
+			s.initWaiters = append(s.initWaiters, wait)
+			s.mu.Unlock()
+			if err := <-wait; err != nil {
+				rejectError(reject, err)
+				return
+			}
+			resolve.Invoke(js.Undefined())
+			return
+		}
+		s.initRunning = true
+		s.mu.Unlock()
+
+		var initErr error
+		defer func() {
+			s.mu.Lock()
+			waiters := s.initWaiters
+			s.initWaiters = nil
+			s.initRunning = false
+			s.mu.Unlock()
+			for _, ch := range waiters {
+				ch <- initErr
+				close(ch)
+			}
+		}()
+
+		fail := func(err error) {
+			initErr = err
+			rejectError(reject, err)
+		}
+
 		if len(args) == 0 || args[0].IsNull() || args[0].IsUndefined() {
-			rejectError(reject, errors.New("config object is required"))
+			fail(errors.New("config object is required"))
 			return
 		}
 		cfg, err := parseConfig(args[0])
 		if err != nil {
-			rejectError(reject, err)
+			fail(err)
 			return
 		}
 		cfg, err = hydrateBootstrapConfig(cfg)
 		if err != nil {
-			rejectError(reject, err)
+			fail(err)
 			return
 		}
 
 		secureClient, err := newSecureClient(cfg.cfg)
 		if err != nil {
-			rejectError(reject, err)
+			fail(err)
 			return
 		}
 
@@ -593,7 +628,7 @@ func (s *wasmState) init(this js.Value, args []js.Value) any {
 
 		if cfg.autoHandshake {
 			if err := s.ensureSession(false); err != nil {
-				rejectError(reject, err)
+				fail(err)
 				return
 			}
 		}
@@ -713,12 +748,19 @@ func (s *wasmState) handshake(this js.Value, args []js.Value) any {
 func (s *wasmState) reset(this js.Value, args []js.Value) any {
 	s.mu.Lock()
 	waiters := s.waiters
+	initWaiters := s.initWaiters
 	s.waiters = nil
+	s.initWaiters = nil
+	s.initRunning = false
 	s.handshakeRunning = false
 	s.client = nil
 	s.mu.Unlock()
 
 	for _, ch := range waiters {
+		ch <- errors.New("secureFetch reset")
+		close(ch)
+	}
+	for _, ch := range initWaiters {
 		ch <- errors.New("secureFetch reset")
 		close(ch)
 	}
